@@ -80,15 +80,56 @@ async def get_auth_status_redirect():
     return RedirectResponse(url="/api/v1/auth/google/status")
 
 @router.get("/files")
-async def list_files(page_size: int = 100):
-    """List files from Google Drive."""
-    if not drive_service.is_authenticated():
-        raise HTTPException(status_code=401, detail="Not authenticated. Please authenticate first.")
+async def list_files(
+    age_group: str = None,
+    category: str = None,
+    page: int = 1,
+    per_page: int = 20,
+    drive_service: GoogleDriveService = Depends(get_current_user)
+):
+    """List files from Google Drive with filtering by age group and category."""
     try:
-        files = drive_service.list_files(page_size)
-        return {"files": files}
+        # Get cached analysis results
+        cached_result = scan_cache.get_cached_result('drive')
+        if not cached_result:
+            # No cache, so fetch, analyze, and cache
+            files_response = await drive_service.list_files(page_size=1000)
+            files = files_response.get('files', [])
+            # Run analysis/categorization on the root folder for drive-wide scan
+            results = await scan_files(source='gdrive', path_or_drive_id='root')
+            scan_cache.update_cache('drive', results)
+            cached_result = results
+
+        # Get the files from the appropriate age group and category
+        if age_group not in cached_result:
+            return {"files": [], "total": 0}
+
+        # Get sensitive info for the specified category
+        sensitive_files = cached_result[age_group]["sensitive_info"].get(category, [])
+        if not sensitive_files:
+            return {"files": [], "total": 0}
+
+        total_files = len(sensitive_files)
+
+        # Calculate pagination
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paginated_files = sensitive_files[start_idx:end_idx]
+
+        return {
+            "files": paginated_files,
+            "total": total_files,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": (total_files + per_page - 1) // per_page
+        }
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error listing files: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error listing files: {str(e)}"
+        )
 
 @router.get("/files/inactive")
 async def list_inactive_files():
@@ -115,12 +156,21 @@ async def get_file_metadata(file_id: str):
 
 @router.get("/directories/{folder_id}/files")
 async def list_directory_files(folder_id: str, page_size: int = 100):
-    """List files in a specific directory."""
-    if not drive_service.is_authenticated():
-        raise HTTPException(status_code=401, detail="Not authenticated. Please authenticate first.")
+    """List files in a specific directory, using cache if available, otherwise fetch, analyze, cache, and return."""
     try:
-        files = drive_service.list_directory(folder_id, page_size)
-        return {"files": files}
+        cached_result = scan_cache.get_cached_result(folder_id)
+        if not cached_result:
+            # No cache, so fetch, analyze, and cache
+            files = await drive_service.list_directory(folder_id, page_size, recursive=True)
+            results = await scan_files(source='gdrive', path_or_drive_id=folder_id)
+            scan_cache.update_cache(folder_id, results)
+            cached_result = results
+        # Return a flat list of all files (across all age groups)
+        all_files = []
+        for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
+            for file_type_files in cached_result.get(age_group, {}).get("file_types", {}).values():
+                all_files.extend(file_type_files)
+        return {"files": all_files}
     except Exception as e:
         logger.error(f"Error listing directory files: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -222,7 +272,14 @@ async def analyze_directory(
             
             # Cache the results
             scan_cache.update_cache(folder_id, response)
-            logger.info(f"Cached scan results for directory {folder_id}")
+            
+            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
+                if age_group in response and "sensitive_info" in response[age_group]:
+                    for category, findings in response[age_group]["sensitive_info"].items():
+                        if findings:
+                            # Print first file's risk data
+                            if findings and findings[0].get("file"):
+                                file_data = findings[0]["file"]
             
             return response
         except Exception as e:
@@ -273,4 +330,16 @@ async def list_directories(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
-        ) 
+        )
+
+# Debug endpoint to receive frontend debug messages
+@router.post("/debug/log")
+async def debug_log(request: Request):
+    """Debug endpoint to receive frontend debug messages and log them to terminal"""
+    try:
+        data = await request.json()
+        if 'data' in data:
+        return {"status": "logged"}
+    except Exception as e:
+        logger.error(f"Error logging debug message: {e}")
+        return {"status": "error"} 

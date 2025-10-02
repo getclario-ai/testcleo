@@ -1,5 +1,5 @@
 # Make sure you're in the backend directory with the venv activated
-    cd /Users/madhuvohra/Madhu/grbg/development/legacy-data-manager/backend
+    cd /Users/madhuvohra/Madhu/clario/development/legacy-data-manager/backend
     source venv/bin/activate
 # Start the server
     uvicorn app.main:app --reload --port 8000

@@ -248,15 +248,24 @@ class GoogleDriveService:
             logger.error(f"Error getting credentials from code: {e}")
             raise
 
-    def get_file_metadata(self, file_id: str) -> Dict:
-        """Get detailed metadata for a specific file."""
-        if not self.service:
-            self.build_service()
-        
-        return self.service.files().get(
+    async def get_file_metadata(self, file_id: str) -> Dict:
+        """Get metadata for a specific file."""
+        await self.ensure_service()
+        try:
+            async with asyncio.timeout(5):  # 5 second timeout
+                result = await asyncio.to_thread(
+                    lambda: self.service.files().get(
             fileId=file_id,
-            fields="id, name, mimeType, modifiedTime, owners, lastModifyingUser, createdTime"
+                        fields="id, name, mimeType, modifiedTime, owners, lastModifyingUser, parents"
         ).execute()
+                )
+            return result
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout getting file metadata for {file_id}")
+            raise ValueError(f"Timeout getting file metadata for {file_id}")
+        except Exception as e:
+            logger.error(f"Error getting file metadata for {file_id}: {e}")
+            raise
 
     def get_inactive_files(self, months_threshold: int = 12) -> List[Dict]:
         """Get files that haven't been modified in the specified number of months."""

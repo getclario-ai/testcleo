@@ -18,6 +18,156 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# RISK SCORING SYSTEM CONFIGURATION
+# =============================================================================
+
+# Content-based risk weights for different sensitive information categories
+# These weights represent the base risk level for each type of sensitive content
+CONTENT_RISK_WEIGHTS = {
+    'confidential': 0.4,  # Highest risk - proprietary/classified information
+    'pii': 0.3,          # High risk - personally identifiable information (GDPR/HIPAA)
+    'financial': 0.2,    # Medium-high risk - financial data and transactions
+    'legal': 0.1          # Medium risk - legal documents and compliance
+}
+
+# Age-based risk factors (based on file creation date)
+# Older files are considered riskier due to potential stale data and forgotten content
+AGE_RISK_FACTORS = {
+    'high': 0.3,    # Files older than 3 years - high risk (stale data)
+    'medium': 0.2,  # Files 1-3 years old - medium risk
+    'low': 0.1      # Files less than 1 year old - low risk
+}
+
+# Access-based risk factors (based on last accessed date)
+# Files that haven't been accessed recently are considered riskier (forgotten files)
+ACCESS_RISK_FACTORS = {
+    'high': 0.3,    # Not accessed for >3 years - high risk (forgotten files)
+    'medium': 0.2,  # Not accessed for 1-3 years - medium risk
+    'low': 0.1      # Not accessed for <1 year - low risk
+}
+
+# =============================================================================
+# RISK CALCULATION FUNCTIONS
+# =============================================================================
+
+def get_age_risk_factor(file_created_date):
+    """
+    Calculate age-based risk factor based on file creation date.
+    
+    Args:
+        file_created_date (datetime): When the file was created
+        
+    Returns:
+        float: Age risk factor (0.1-0.3)
+    """
+    if not file_created_date:
+        # If no creation date available, assume medium risk
+        return AGE_RISK_FACTORS['medium']
+    
+    try:
+        # Calculate age in years
+        age_years = (datetime.now() - file_created_date).days / 365
+        
+        if age_years >= 3:
+            return AGE_RISK_FACTORS['high']    # >3 years old
+        elif age_years >= 1:
+            return AGE_RISK_FACTORS['medium']  # 1-3 years old
+        else:
+            return AGE_RISK_FACTORS['low']     # <1 year old
+    except Exception as e:
+        logger.warning(f"Error calculating age risk factor: {e}")
+        return AGE_RISK_FACTORS['medium']
+
+def get_access_risk_factor(last_accessed_date):
+    """
+    Calculate access-based risk factor based on last accessed date.
+    
+    Args:
+        last_accessed_date (datetime): When the file was last accessed
+        
+    Returns:
+        float: Access risk factor (0.1-0.3)
+    """
+    if not last_accessed_date:
+        # If no access date available, assume high risk (forgotten files)
+        return ACCESS_RISK_FACTORS['high']
+    
+    try:
+        # Calculate time since last access in years
+        years_since_access = (datetime.now() - last_accessed_date).days / 365
+        
+        if years_since_access >= 3:
+            return ACCESS_RISK_FACTORS['high']    # >3 years since access
+        elif years_since_access >= 1:
+            return ACCESS_RISK_FACTORS['medium']  # 1-3 years since access
+        else:
+            return ACCESS_RISK_FACTORS['low']     # <1 year since access
+    except Exception as e:
+        logger.warning(f"Error calculating access risk factor: {e}")
+        return ACCESS_RISK_FACTORS['medium']
+
+def calculate_weighted_risk_score(file_data, findings):
+    """
+    Calculate comprehensive risk score using weighted scoring system.
+    
+    This function implements a multi-factor risk assessment that considers:
+    1. Content-based risk (type and amount of sensitive information)
+    2. Age-based risk (file creation date)
+    3. Access-based risk (last accessed date)
+    
+    Args:
+        file_data (dict): File metadata including creation and access dates
+        findings (dict): Sensitive content findings by category
+        
+    Returns:
+        float: Risk score between 0.0 and 1.0
+    """
+    base_score = 0.0
+    
+    # Step 1: Calculate content-based risk score
+    # Sum up risk weights for all sensitive categories found in the file
+    for category in findings.keys():
+        base_score += CONTENT_RISK_WEIGHTS.get(category, 0.05)
+    
+    # Step 2: Add age-based risk factor
+    # Older files are riskier due to potential stale data
+    age_factor = get_age_risk_factor(file_data.get('createdTime'))
+    base_score += age_factor
+    
+    # Step 3: Add access-based risk factor
+    # Files not accessed recently are riskier (potentially forgotten)
+    access_factor = get_access_risk_factor(file_data.get('lastAccessedTime'))
+    base_score += access_factor
+    
+    # Step 4: Cap the final score at 1.0 (100% risk)
+    final_score = min(base_score, 1.0)
+    
+    # Log the risk calculation for debugging
+    logger.debug(f"Risk calculation for {file_data.get('name', 'unknown')}: "
+                f"content={base_score - age_factor - access_factor:.2f}, "
+                f"age={age_factor:.2f}, access={access_factor:.2f}, "
+                f"total={final_score:.2f}")
+    
+    return final_score
+
+def get_risk_level_label(risk_score):
+    """
+    Convert numeric risk score to risk level label.
+    
+    Args:
+        risk_score (float): Risk score between 0.0 and 1.0
+        
+    Returns:
+        str: Risk level label ('high', 'medium', 'low')
+    """
+    if risk_score >= 0.7:
+        return "high"
+    elif risk_score >= 0.4:
+        return "medium"
+    else:
+        return "low"
+
 # Optional: Google API modules
 try:
     from googleapiclient.discovery import build
@@ -156,7 +306,33 @@ patterns = {
     "drivers_license": r"(?:Driver'?s? License|DL|License Number|License #)(?:[^0-9])*(?:[A-Z][0-9]{7}|[A-Z][0-9]{8}|[A-Z][0-9]{12}|\d{7,9}|[A-Z]\d{2}[-\s]?\d{3}[-\s]?\d{3}|[A-Z]\d{3}[-\s]?\d{3}[-\s]?\d{3}|[A-Z]{1,2}\d{4,7})",    
     
     # Matches address with validation and context
-    "address_like": r"(?:Address|Location|Street)(?:[^0-9])*\d{1,5}\s[\w\s.]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Circle|Cir|Court|Ct|Way|Place|Pl|Square|Sq)\b"
+    "address_like": r"(?:Address|Location|Street)(?:[^0-9])*\d{1,5}\s[\w\s.]+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd|Lane|Ln|Drive|Dr|Circle|Cir|Court|Ct|Way|Place|Pl|Square|Sq)\b",
+    
+    #Legal Patterns
+    "contract_number": r"(?:Contract|Agreement|License)\s*(?:#|Number|No\.?)\s*[A-Z0-9-]+",
+    "legal_case": r"(?:Case|Docket)\s*(?:#|Number|No\.?)\s*[A-Z0-9-]+",
+    "regulation_ref": r"(?:CFR|U\.S\.C\.|Regulation)\s+\d+[A-Z]?(?:\.\d+)*",
+    
+    # Confidential Patterns
+    "contract_number": r"(?:Contract|Agreement|License)\s*(?:#|Number|No\.?)\s*[A-Z0-9-]+",
+    "classification_level": r"(?:TOP SECRET|SECRET|CONFIDENTIAL|RESTRICTED|INTERNAL)",
+    "nda_reference": r"(?:NDA|Non-Disclosure|Non Disclosure)\s+(?:Agreement|Contract)"
+}
+
+pattern_categories = {
+    "credit_card": "financial",
+    "expiry_date": "financial", 
+    "ssn": "pii",
+    "email": "pii",
+    "phone": "pii",
+    "drivers_license": "pii",
+    "address_like": "pii",
+    "contract_number": "legal",
+    "legal_case": "legal", 
+    "regulation_ref": "legal",
+    "confidential_header": "confidential",
+    "classification_level": "confidential",
+    "nda_reference": "confidential"
 }
 
 now = datetime.now()
@@ -199,12 +375,13 @@ def scan_text(text):
     # Check for pattern matches
     for label, pattern in patterns.items():
         if re.search(pattern, text):
-            findings["pii"].append(label)
+            category = pattern_categories.get(label, "pii")  # Default to pii if not specified
+            findings[category].append(label)
     
     # Only return categories that have findings
     return {k: v for k, v in findings.items() if v}
 
-def extract_text_from_file(stream, file_type):
+def extract_text_from_file(stream, file_type): 
     try:
         if file_type == 'docx':
             doc = Document(stream)
@@ -284,7 +461,6 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
         try:
             files = await drive_service.list_directory(path_or_drive_id, recursive=True)
             results["total_files"] = len(files)
-            logger.info(f"*** Total files found: {len(files)}")
             
             # Track unique sensitive files
             sensitive_file_ids = set()
@@ -320,13 +496,14 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                     type_counts[file_type] += 1
                     
                     # Add file to appropriate category
-                    results[age_group]["total_documents"] += 1
-                    results[age_group]["file_types"][file_type].append({
+                    file_dict = {
                         "id": file_id,
                         "name": name,
                         "mimeType": mime_type,
-                        "modifiedTime": file['modifiedTime']
-                    })
+                        "modifiedTime": file['modifiedTime'],
+                        "size": int(file.get('size', 0))
+                    }
+                    results[age_group]["file_types"][file_type].append(file_dict)
 
                     # Only scan content for text-based files
                     if file_type in ['documents', 'spreadsheets', 'presentations', 'pdfs']:
@@ -335,11 +512,10 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                             if content:
                                 findings = scan_text(content)
                                 if findings:  # If any sensitive content was found
-                                    if file_id not in sensitive_file_ids:  # Only count each file once
+                                    if file_id not in sensitive_file_ids: 
                                         results[age_group]["total_sensitive"] += 1
                                         sensitive_file_ids.add(file_id)
                                         results["total_sensitive_files"] += 1
-                                    
                                     for k, v in findings.items():
                                         if v:  # Only add if there are findings
                                             results[age_group]["sensitive_info"][k].append({
@@ -347,7 +523,8 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                                                     "id": file_id,
                                                     "name": name,
                                                     "mimeType": mime_type,
-                                                    "modifiedTime": file['modifiedTime']
+                                                    "modifiedTime": file['modifiedTime'],
+                                                    "size": int(file.get('size', 0))
                                                 },
                                                 "confidence": 0.8,
                                                 "explanation": f"Found {', '.join(v)}",
@@ -365,6 +542,126 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
             logger.info(f"Found {len(sensitive_file_ids)} sensitive files")
             results["scan_complete"] = True
             
+            # --- ENRICH FILES WITH SENSITIVITY INFO AND CALCULATE WEIGHTED RISK SCORES ---
+            # Build a comprehensive mapping from file_id to all sensitive categories and calculated risk score
+            file_sensitivity = {}
+            
+            # First pass: Collect all sensitive categories for each file
+            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
+                for category, findings in results[age_group]["sensitive_info"].items():
+                    for finding in findings:
+                        file_info = finding.get("file")
+                        if file_info and "id" in file_info:
+                            file_id = file_info["id"]
+                            
+                            # Initialize file sensitivity data if not exists
+                            if file_id not in file_sensitivity:
+                                file_sensitivity[file_id] = {
+                                    "categories": set(),
+                                    "file_data": file_info,
+                                    "explanations": []
+                                }
+                            
+                            # Add this category to the file's sensitive categories
+                            file_sensitivity[file_id]["categories"].add(category)
+                            file_sensitivity[file_id]["explanations"].append(finding.get("explanation", ""))
+            
+            # Second pass: Calculate weighted risk scores for each file
+            for file_id, sensitivity_data in file_sensitivity.items():
+                # Convert set to list for JSON serialization
+                categories_list = list(sensitivity_data["categories"])
+                
+                # Calculate weighted risk score using the new scoring system
+                risk_score = calculate_weighted_risk_score(
+                    sensitivity_data["file_data"], 
+                    {cat: [cat] for cat in categories_list}  # Convert to findings format
+                )
+                
+                # Determine primary sensitivity reason (highest weighted category)
+                primary_category = max(categories_list, key=lambda cat: CONTENT_RISK_WEIGHTS.get(cat, 0))
+                
+                # Update the sensitivity data with calculated risk score
+                file_sensitivity[file_id] = {
+                    "sensitivityReason": primary_category,
+                    "riskLevel": risk_score,
+                    "riskLevelLabel": get_risk_level_label(risk_score),
+                    "allCategories": categories_list,
+                    "explanation": "; ".join(sensitivity_data["explanations"])
+                }
+            # --- ENRICH FILES WITH CALCULATED RISK SCORES ---
+            # Apply the calculated weighted risk scores to all files in the results
+            
+            # 1. Apply risk data to files in file_types section
+            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
+                for file_type, files in results[age_group]["file_types"].items():
+                    for file in files:
+                        if isinstance(file, dict) and "id" in file:
+                            sens = file_sensitivity.get(file["id"])
+                            if sens:
+                                # Apply the new weighted risk scoring data
+                                file["sensitivityReason"] = sens["sensitivityReason"]
+                                file["riskLevel"] = sens["riskLevel"]
+                                file["riskLevelLabel"] = sens["riskLevelLabel"]
+                                file["allSensitiveCategories"] = sens["allCategories"]
+                                file["sensitivityExplanation"] = sens["explanation"]
+                                
+                                # Log the risk assessment for debugging
+                                logger.debug(f"File {file.get('name', 'unknown')} risk assessment: "
+                                           f"score={sens['riskLevel']:.2f}, level={sens['riskLevelLabel']}, "
+                                           f"categories={sens['allCategories']}")
+                            else:
+                                # Non-sensitive files get default values
+                                file["sensitivityReason"] = None
+                                file["riskLevel"] = None
+                                file["riskLevelLabel"] = None
+                                file["allSensitiveCategories"] = []
+                                file["sensitivityExplanation"] = None
+            
+            # 2. Apply risk data to files in sensitive_info section (CRITICAL FIX)
+            # This ensures that the file objects in findings also have the risk data
+            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
+                for category, findings in results[age_group]["sensitive_info"].items():
+                    for finding in findings:
+                        file_info = finding.get("file")
+                        if file_info and isinstance(file_info, dict) and "id" in file_info:
+                            sens = file_sensitivity.get(file_info["id"])
+                            if sens:
+                                # Apply the new weighted risk scoring data to the file object in the finding
+                                file_info["sensitivityReason"] = sens["sensitivityReason"]
+                                file_info["riskLevel"] = sens["riskLevel"]
+                                file_info["riskLevelLabel"] = sens["riskLevelLabel"]
+                                file_info["allSensitiveCategories"] = sens["allCategories"]
+                                file_info["sensitivityExplanation"] = sens["explanation"]
+                                
+                                logger.debug(f"Sensitive info file {file_info.get('name', 'unknown')} risk assessment: "
+                                           f"score={sens['riskLevel']:.2f}, level={sens['riskLevelLabel']}, "
+                                           f"categories={sens['allCategories']}")
+            # --- CALCULATE SUMMARY STATISTICS ---
+            # Count unique sensitive files per age group for summary statistics
+            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
+                unique_sensitive_ids = set()
+                for category, findings in results[age_group]["sensitive_info"].items():
+                    for finding in findings:
+                        file_info = finding.get("file")
+                        if file_info and "id" in file_info:
+                            unique_sensitive_ids.add(file_info["id"])
+                            # Debug log file with new risk scoring information
+                            sens_data = file_sensitivity.get(file_info["id"], {})
+                            logger.info(f"[DEBUG] Sensitive file - Age group: {age_group}, Category: {category}, "
+                                       f"Name: {file_info.get('name')}, Size: {file_info.get('size')}, "
+                                       f"Risk Score: {sens_data.get('riskLevel', 'N/A'):.2f}, "
+                                       f"Risk Level: {sens_data.get('riskLevelLabel', 'N/A')}")
+                results[age_group]["total_sensitive"] = len(unique_sensitive_ids)
+            
+            # Log summary of risk distribution for the entire scan
+            total_files = len(file_sensitivity)
+            high_risk_files = sum(1 for data in file_sensitivity.values() if data.get('riskLevelLabel') == 'high')
+            medium_risk_files = sum(1 for data in file_sensitivity.values() if data.get('riskLevelLabel') == 'medium')
+            low_risk_files = sum(1 for data in file_sensitivity.values() if data.get('riskLevelLabel') == 'low')
+            
+            logger.log(f"Risk distribution summary: High={high_risk_files}, Medium={medium_risk_files}, Low={low_risk_files}")
+            logger.log(f"Total sensitive files processed: {total_files}")
+       
         except Exception as e:
             logger.error(f"Error scanning files: {str(e)}")
             raise

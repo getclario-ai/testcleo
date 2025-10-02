@@ -1,4 +1,4 @@
-.klio-container {
+.cleo-container {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -7,7 +7,7 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.klio-header {
+.cleo-header {
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -17,20 +17,20 @@
   border-top-right-radius: 12px;
 }
 
-.klio-avatar {
+.cleo-avatar {
   width: 40px;
   height: 40px;
   border-radius: 50%;
   background-color: white;
 }
 
-.klio-name {
+.cleo-name {
   color: white;
   font-size: 1.25rem;
   font-weight: 600;
 }
 
-.klio-content {
+.cleo-content {
   flex: 1;
   padding: 1.5rem;
   overflow-y: auto;
@@ -75,12 +75,12 @@
   box-shadow: none;
 }
 
-.klio-header h2 {
+.cleo-header h2 {
   color: var(--primary-color);
   margin-bottom: 0.5rem;
 }
 
-.klio-header p {
+.cleo-header p {
   color: var(--text-color);
   font-size: 0.9rem;
 }
@@ -146,7 +146,7 @@
   font-size: 0.9rem;
 }
 
-.klio-messages {
+.cleo-messages {
   flex: 1;
   overflow-y: auto;
   padding: 1.5rem;

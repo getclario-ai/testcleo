@@ -10,5 +10,5 @@ Set environment
 
 
 Start frontend server
-    cd /Users/madhuvohra/Madhu/grbg/development/legacy-data-manager/frontend
+    cd /Users/madhuvohra/Madhu/clario/development/legacy-data-manager/frontend
     npm start

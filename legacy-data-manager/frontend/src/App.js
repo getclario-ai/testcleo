@@ -1,46 +1,65 @@
-import React, { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import AuthCallback from './components/AuthCallback';
 import DirectoryList from './components/DirectoryList';
 import DirectoryExplorer from './components/DirectoryExplorer';
-import Klio from './components/Klio';
+import Cleo from './components/Cleo';
+import SensitiveContent from './components/SensitiveContent';
+import FileCategoryDetails from './components/FileCategoryDetails';
+import FileInsightsDashboard from './components/FileInsightsDashboard';
+import RiskCategoryInsightsDashboard from './components/RiskCategoryInsightsDashboard';
+import ReviewSensitiveFiles from './components/ReviewSensitiveFiles';
 import './App.css';
 import config from './config';
 
-function App() {
-  const [selectedDirectory, setSelectedDirectory] = useState(null);
-  const [activeTab, setActiveTab] = useState('moreThanThreeYears');
+function AppContent() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [selectedDirectory, setSelectedDirectory] = useState(() => {
+    // Try to restore state from location or localStorage
+    return location.state?.selectedDirectory || JSON.parse(localStorage.getItem('fid_selectedDirectory')) || null;
+  });
+  const [activeTab, setActiveTab] = useState(() => {
+    return location.state?.activeTab || localStorage.getItem('fid_activeTab') || 'moreThanThreeYears';
+  });
   const [typeSort, setTypeSort] = useState('count'); // 'count' or 'size'
-  const [stats, setStats] = useState({
-    docCount: 0,
-    duplicateDocuments: 0,
-    sensitiveDocuments: 0,
-    ageDistribution: {
-      moreThanThreeYears: {
-        types: {},
-        risks: {}
-      },
-      oneToThreeYears: {
-        types: {},
-        risks: {}
-      },
-      lessThanOneYear: {
-        types: {},
-        risks: {}
+  const [stats, setStats] = useState(() => {
+    return location.state?.stats || JSON.parse(localStorage.getItem('fid_stats')) || {
+      docCount: 0,
+      duplicateDocuments: 0,
+      sensitiveDocuments: 0,
+      ageDistribution: {
+        moreThanThreeYears: { types: {}, risks: {} },
+        oneToThreeYears: { types: {}, risks: {} },
+        lessThanOneYear: { types: {}, risks: {} }
       }
-    }
+    };
   });
 
-  const handleKlioCommand = (command) => {
+  // Save state to localStorage when it changes
+  useEffect(() => {
+    if (selectedDirectory) {
+      localStorage.setItem('fid_selectedDirectory', JSON.stringify(selectedDirectory));
+    }
+  }, [selectedDirectory]);
+
+  // Save stats to localStorage when they change
+  useEffect(() => {
+    if (stats) {
+      localStorage.setItem('fid_stats', JSON.stringify(stats));
+    }
+  }, [stats]);
+
+  const handleCleoCommand = (command) => {
     switch (command.name.toLowerCase()) {
       case 'list directories':
-        // Just trigger the directory listing in Klio
+        // Just trigger the directory listing in Cleo
         break;
       case 'analyze':
-        // Analysis will be handled by Klio component
+        // Analysis will be handled by Cleo component
         break;
       case 'clean':
-        // Cleaning command will be handled by Klio component
+        // Cleaning command will be handled by Cleo component
         break;
       default:
         console.warn('Unknown command:', command.name);
@@ -102,13 +121,50 @@ function App() {
   const handleStatsUpdate = (newStats) => {
     console.log('Received new stats in App.js:', newStats);
     
-    // Update selected directory if provided
     if (newStats.directory) {
       setSelectedDirectory(newStats.directory);
     }
     
-    // Simply update the stats with the pre-transformed data
     setStats(newStats);
+  };
+
+  const handleViewDetails = (category) => {
+    // Navigate with current state
+    navigate(`/sensitive-content/${activeTab}/${category}`, {
+      state: {
+        selectedDirectory,
+        activeTab,
+        stats,
+        returnTo: location.pathname,
+        directoryId: selectedDirectory?.id
+      }
+    });
+  };
+
+  const handleViewFileCategoryDetails = (fileType) => {
+    navigate(`/file-category/${activeTab}/${fileType}`, {
+      state: {
+        selectedDirectory,
+        activeTab,
+        stats,
+        returnTo: location.pathname,
+        directoryId: selectedDirectory?.id
+      }
+    });
+  };
+
+  // Add the sensitive documents click handler
+  const handleSensitiveDocumentsClick = () => {
+    console.log('Sensitive documents tile clicked!');
+    navigate('/sensitive-content', {
+      state: {
+        selectedDirectory,
+        activeTab,
+        stats,
+        returnTo: location.pathname,
+        directoryId: selectedDirectory?.id
+      }
+    });
   };
 
   const formatBytes = (bytes) => {
@@ -294,27 +350,108 @@ function App() {
     return groupedRisks;
   };
 
-  const renderAgeSection = (data, title) => {    
-    if (!data) {
-      return null;
+  const renderAgeSection = (data, title) => {
+    const { types, risks } = data || { types: {}, risks: {} };
+    
+    if (!selectedDirectory) {
+      return (
+        <div className="age-section">
+          <div className="section-content">
+            <div className="info-message">
+              Please select a directory to analyze.
+            </div>
+          </div>
+        </div>
+      );
     }
 
-    const { types = {}, risks = {} } = data;
+    if (!data || (!Object.keys(types).length && !Object.keys(risks).length)) {
+      return (
+        <div className="age-section">
+          <div className="section-content">
+            <div className="info-message">
+              Please run analysis first by using the analyze command in chat.
+            </div>
+          </div>
+        </div>
+      );
+    }
 
+    // Process risks to deduplicate files across categories
+    const processedRisks = {};
+    if (risks && Object.keys(risks).length > 0) {
+      // First, collect all unique files per category
+      const categoryFiles = {};
+      Object.entries(risks).forEach(([category, riskData]) => {
+        if (riskData && riskData.files && Array.isArray(riskData.files)) {
+          const uniqueFiles = new Set();
+          riskData.files.forEach(finding => {
+            if (finding.file && finding.file.id) {
+              uniqueFiles.add(finding.file.id);
+            }
+          });
+          categoryFiles[category] = uniqueFiles.size;
+        }
+      });
+
+      // Calculate percentages based on total unique files across all categories
+      const totalUniqueFiles = new Set();
+      Object.values(risks).forEach(riskData => {
+        if (riskData && riskData.files && Array.isArray(riskData.files)) {
+          riskData.files.forEach(finding => {
+            if (finding.file && finding.file.id) {
+              totalUniqueFiles.add(finding.file.id);
+            }
+          });
+        }
+      });
+      const totalFiles = totalUniqueFiles.size;
+
+      // Create processed risks with deduplicated counts
+      Object.entries(risks).forEach(([category, riskData]) => {
+        if (riskData && riskData.files && Array.isArray(riskData.files)) {
+          const uniqueCount = categoryFiles[category] || 0;
+          const percentage = totalFiles > 0 ? (uniqueCount / totalFiles * 100) : 0;
+          
+          processedRisks[category] = {
+            count: uniqueCount,
+            percentage: percentage,
+            files: riskData.files // Keep original files for detailed view
+          };
+        }
+      });
+    }
+    
     return (
       <div className="age-section">
-        <h3>{title}</h3>
-        <div className="age-section-content">
-          {/* Types Section */}
-          <div className="section-content">
-            <h4>File Types</h4>
-            <div className="type-bars">
-              {Object.entries(types)
-                .filter(([_, stats]) => stats.count > 0)
-                .sort((a, b) => b[1].count - a[1].count)
-                .map(([type, stats]) => (
-                  <div key={type} className="type-bar">
-                    <span className="type-label">{type.charAt(0).toUpperCase() + type.slice(1)}</span>
+        <div className="section-header">
+          <h3>{title}</h3>
+        </div>
+        <div className="section-content file-types-card">
+          <h4>File Categories</h4>
+          <div className="type-bars">
+            {Object.entries(types)
+              .filter(([_, stats]) => stats.count > 0)
+              .sort((a, b) => b[1].count - a[1].count)
+              .map(([type, stats]) => {
+                const fileTypeColors = {
+                  documents: '#4285F4',
+                  spreadsheets: '#0F9D58',
+                  presentations: '#F4B400',
+                  pdfs: '#DB4437',
+                  images: '#9C27B0',
+                  others: '#757575'
+                };
+                return (
+                  <div
+                    key={type}
+                    className="type-bar clickable-type-bar"
+                    onClick={() => handleViewFileCategoryDetails(type)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <span className="type-label">
+                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                    </span>
                     <div className="bar-container">
                       <div 
                         className="bar" 
@@ -326,51 +463,52 @@ function App() {
                     </div>
                     <div className="type-stats">
                       <span className="type-count">{stats.count} files</span>
-                      <span className="type-size">{formatBytes(stats.size || 0)}</span>
                       <span className="type-percentage">{stats.percentage.toFixed(1)}%</span>
                     </div>
                   </div>
-                ))}
-            </div>
+                );
+              })}
           </div>
-
-          {/* Risks Section */}
-          <div className="section-content">
-            <h4>Risk Categories</h4>
-            <div className="type-bars">
-              {Object.entries(risks)
-                .filter(([_, stats]) => stats.count > 0)
-                .sort((a, b) => b[1].count - a[1].count)
-                .map(([category, stats]) => {
-                  const riskColors = {
-                    pii: '#e74c3c',
-                    financial: '#f39c12',
-                    legal: '#8e44ad',
-                    confidential: '#c0392b'
-                  };
-                  
-                  return (
-                    <div key={category} className="type-bar">
-                      <span className="type-label">
-                        {category.charAt(0).toUpperCase() + category.slice(1)}
-                      </span>
-                      <div className="bar-container">
-                        <div 
-                          className="bar" 
-                          style={{ 
-                            width: `${stats.percentage}%`,
-                            backgroundColor: riskColors[category] || '#757575'
-                          }}
-                        ></div>
-                      </div>
-                      <div className="type-stats">
-                        <span className="type-count">{stats.count} files</span>
-                        <span className="type-percentage">{stats.percentage.toFixed(1)}%</span>
-                      </div>
+        </div>
+        <div className="section-content">
+          <h4>Risk Categories</h4>
+          <div className="type-bars">
+            {Object.entries(processedRisks)
+              .filter(([_, stats]) => stats.count > 0)
+              .sort((a, b) => b[1].count - a[1].count)
+              .map(([category, stats]) => {
+                const riskColors = {
+                  pii: '#e74c3c',
+                  financial: '#f39c12',
+                  legal: '#8e44ad',
+                  confidential: '#c0392b'
+                };
+                return (
+                  <div
+                    key={category}
+                    className="type-bar clickable-type-bar"
+                    onClick={() => handleViewDetails(category)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <span className="type-label">
+                      {category.charAt(0).toUpperCase() + category.slice(1)}
+                    </span>
+                    <div className="bar-container">
+                      <div 
+                        className="bar" 
+                        style={{ 
+                          width: `${stats.percentage}%`,
+                          backgroundColor: riskColors[category] || '#757575'
+                        }}
+                      ></div>
                     </div>
-                  );
-                })}
-            </div>
+                    <div className="type-stats">
+                      <span className="type-count">{stats.count} files</span>
+                      <span className="type-percentage">{stats.percentage.toFixed(1)}%</span>
+                    </div>
+                  </div>
+                );
+              })}
           </div>
         </div>
       </div>
@@ -449,123 +587,160 @@ function App() {
     }
   };
 
+  // Defensive rendering for missing context
+  if (!stats || !('docCount' in stats)) {
+    return (
+      <div className="sensitive-content-container">
+        <div className="error-message">
+          <p>Missing dashboard context. Please return to the dashboard and run analysis again.</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <Routes>
+      <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/sensitive-content" element={<SensitiveContent />} />
+      <Route path="/sensitive-content/:ageGroup/:category" element={<RiskCategoryInsightsDashboard />} />
+      <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
+      <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />
+      <Route
+        path="/"
+        element={
+          <div className="app-container">
+            <header className="app-header">
+              <h1>Clario</h1>
+              <h2>Smart Structured Secure</h2>
+            </header>
+            <div className="app-content">
+              <div className="dashboard-section">
+                <div className="document-overview">
+                  <h2>Scanning {selectedDirectory ? `: ${selectedDirectory.name}` : ''}</h2>
+                  <div className="stats-grid">
+                    <div className="stat-card" title="Total documents in this drive">
+                      <div className="stat-number">
+                        {stats?.docCount != null ? stats.docCount.toLocaleString() : 0}
+                        {stats.docCount > 0 && <span className="trend-up">↑</span>}
+                      </div>
+                      <div className="stat-label">Files scanned</div>
+                    </div>
+                    <div 
+                      className="stat-card clickable" 
+                      title="Documents that may contain sensitive information"
+                      onClick={handleSensitiveDocumentsClick}
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <div className="stat-number">
+                        {stats?.sensitiveDocuments != null ? stats.sensitiveDocuments.toLocaleString() : 0}
+                        {stats.sensitiveDocuments > 0 && <span className="trend-warning">!</span>}
+                      </div>
+                      <div className="stat-label">Sensitive documents</div>
+                    </div>
+                    <div className="stat-card" title="Documents with similar content or identical names">
+                      <div className="stat-number">
+                        {stats?.duplicateDocuments != null ? stats.duplicateDocuments.toLocaleString() : 0}
+                        {stats.duplicateDocuments > 0 && <span className="trend-up">↑</span>}
+                      </div>
+                      <div className="stat-label">Duplicate documents</div>
+                    </div>
+                    
+                  </div>
+
+                  <div className="age-distribution">
+                    <div className="analysis-tabs">
+                      <button 
+                        className={`tab-button ${activeTab === 'moreThanThreeYears' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('moreThanThreeYears')}
+                      >
+                        &gt; 3 years
+                      </button>
+                      <button 
+                        className={`tab-button ${activeTab === 'oneToThreeYears' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('oneToThreeYears')}
+                      >
+                        1-3 years
+                      </button>
+                      <button 
+                        className={`tab-button ${activeTab === 'lessThanOneYear' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('lessThanOneYear')}
+                      >
+                        &lt; 1 year
+                      </button>
+                    </div>
+                    {renderTabContent()}
+                  </div>
+                </div>
+
+                <div className="bottom-panels">
+                  <div className="categories">
+                    <h3>Categories</h3>
+                    <div className="category-list">
+                      <div className="category-item">
+                        <span>HR</span>
+                        <button className="review-button">Review →</button>
+                      </div>
+                      <div className="category-item">
+                        <span>Finance</span>
+                        <button className="review-button">Review →</button>
+                      </div>
+                      <div className="category-item">
+                        <span>Legal</span>
+                        <button className="review-button">Review →</button>
+                      </div>
+                      <div className="category-item">
+                        <span>Operations</span>
+                        <span>0 min</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="active-rules">
+                    <h3>Active rules</h3>
+                    <div className="rules-list">
+                      <div className="rule-item">
+                        <div className="rule-text">Find stale HR docs 'do *ay'</div>
+                        <div className="rule-frequency">Daily →</div>
+                      </div>
+                      <div className="rule-item">
+                        <div className="rule-text">Archive finance documents with Unused in 2 years</div>
+                        <div className="rule-frequency">Weekly →</div>
+                      </div>
+                      <div className="rule-item">
+                        <div className="rule-text">Flag sensitive files containing payment* ternatics</div>
+                        <div className="rule-frequency">Monthly →</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="cleo-section">
+                <Cleo 
+                  onCommand={handleCleoCommand}
+                  onStatsUpdate={handleStatsUpdate}
+                />
+              </div>
+            </div>
+          </div>
+        }
+      />
+    </Routes>
+  );
+}
+
+function App() {
   return (
     <Router>
       <Routes>
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/sensitive-content" element={<SensitiveContent />} />
+        <Route path="/sensitive-content/:ageGroup/:category" element={<RiskCategoryInsightsDashboard />} />
+        <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
+        <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />
         <Route
           path="/"
-          element={
-            <div className="app-container">
-              <header className="app-header">
-                <h1>grbg.ai</h1>
-              </header>
-              <div className="app-content">
-                <div className="dashboard-section">
-                  <div className="document-overview">
-                    <h2>Scanning {selectedDirectory ? `: ${selectedDirectory.name}` : ''}</h2>
-                    <div className="stats-grid">
-                      <div className="stat-card" title="Total documents in this drive">
-                        <div className="stat-number">
-                          {stats.docCount.toLocaleString()}
-                          {stats.docCount > 0 && <span className="trend-up">↑</span>}
-                        </div>
-                        <div className="stat-label">Files scanned</div>
-                      </div>
-                      <div className="stat-card" title="Documents that may contain sensitive information">
-                        <div className="stat-number">
-                          {stats.sensitiveDocuments.toLocaleString()}
-                          {stats.sensitiveDocuments > 0 && <span className="trend-warning">!</span>}
-                        </div>
-                        <div className="stat-label">Sensitive documents</div>
-                      </div>
-                      <div className="stat-card" title="Documents with similar content or identical names">
-                        <div className="stat-number">
-                          {stats.duplicateDocuments.toLocaleString()}
-                          {stats.duplicateDocuments > 0 && <span className="trend-up">↑</span>}
-                        </div>
-                        <div className="stat-label">Duplicate documents</div>
-                      </div>
-                      
-                    </div>
-
-                    <div className="age-distribution">
-                      <div className="analysis-tabs">
-                        <button 
-                          className={`tab-button ${activeTab === 'moreThanThreeYears' ? 'active' : ''}`}
-                          onClick={() => setActiveTab('moreThanThreeYears')}
-                        >
-                          &gt; 3 years
-                        </button>
-                        <button 
-                          className={`tab-button ${activeTab === 'oneToThreeYears' ? 'active' : ''}`}
-                          onClick={() => setActiveTab('oneToThreeYears')}
-                        >
-                          1-3 years
-                        </button>
-                        <button 
-                          className={`tab-button ${activeTab === 'lessThanOneYear' ? 'active' : ''}`}
-                          onClick={() => setActiveTab('lessThanOneYear')}
-                        >
-                          &lt; 1 year
-                        </button>
-                      </div>
-                      {renderTabContent()}
-                    </div>
-                  </div>
-
-                  <div className="bottom-panels">
-                    <div className="categories">
-                      <h3>Categories</h3>
-                      <div className="category-list">
-                        <div className="category-item">
-                          <span>HR</span>
-                          <button className="review-button">Review →</button>
-                        </div>
-                        <div className="category-item">
-                          <span>Finance</span>
-                          <button className="review-button">Review →</button>
-                        </div>
-                        <div className="category-item">
-                          <span>Legal</span>
-                          <button className="review-button">Review →</button>
-                        </div>
-                        <div className="category-item">
-                          <span>Operations</span>
-                          <span>0 min</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="active-rules">
-                      <h3>Active rules</h3>
-                      <div className="rules-list">
-                        <div className="rule-item">
-                          <div className="rule-text">Find stale HR docs 'do *ay'</div>
-                          <div className="rule-frequency">Daily →</div>
-                        </div>
-                        <div className="rule-item">
-                          <div className="rule-text">Archive finance documents with Unused in 2 years</div>
-                          <div className="rule-frequency">Weekly →</div>
-                        </div>
-                        <div className="rule-item">
-                          <div className="rule-text">Flag sensitive files containing payment* ternatics</div>
-                          <div className="rule-frequency">Monthly →</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="klio-section">
-                  <Klio 
-                    onCommand={handleKlioCommand}
-                    onStatsUpdate={handleStatsUpdate}
-                  />
-                </div>
-              </div>
-    </div>
-          }
+          element={<AppContent />}
         />
       </Routes>
     </Router>

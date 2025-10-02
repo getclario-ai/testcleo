@@ -26,15 +26,15 @@ async def get_drive_service():
     service = GoogleDriveService()
     return service
 
-@router.get("/google/login", summary="Initiate Google OAuth2 flow for Klio")
+@router.get("/google/login", summary="Initiate Google OAuth2 flow for Cleo")
 async def google_login(drive_service: GoogleDriveService = Depends(get_drive_service)):
     """
     Redirects the user to Google's consent screen.
     """
     try:
-        # Create state with origin=klio
+        # Create state with origin=cleo
         state_data = {
-            "origin": "klio",
+            "origin": "cleo",
             "session_id": str(uuid.uuid4())
         }
         encoded_state = json.dumps(state_data)
@@ -85,7 +85,7 @@ async def google_status(drive_service: GoogleDriveService = Depends(get_drive_se
         is_authenticated = await drive_service.is_authenticated()
         return {
             "isAuthenticated": is_authenticated,
-            "userType": "klio",
+            "userType": "cleo",
             "detail": "Successfully checked authentication status"
         }
     except Exception as e:

@@ -15,6 +15,12 @@ const DirectoryExplorer = ({ dashboardState, selectedDirectory }) => {
     }
   }, [selectedDirectory]);
 
+  useEffect(() => {
+    if (selectedDirectory) {
+      localStorage.setItem('fid_selectedDirectory', JSON.stringify(selectedDirectory));
+    }
+  }, [selectedDirectory]);
+
   const fetchDirectoryContents = async (folderId) => {
     setLoading(true);
     setError(null);
