@@ -1,4 +1,4 @@
-.klio-container {
+.cleo-container {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -7,7 +7,7 @@
   padding: 1.5rem;
 }
 
-.klio-header {
+.cleo-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -15,13 +15,13 @@
   color: white;
 }
 
-.klio-header-left {
+.cleo-header-left {
   display: flex;
   align-items: center;
   gap: 0.75rem;
 }
 
-.klio-avatar {
+.cleo-avatar {
   width: 2rem;
   height: 2rem;
   border-radius: 50%;
@@ -33,13 +33,13 @@
   font-weight: 600;
 }
 
-.klio-name {
+.cleo-name {
   font-size: 1rem;
   font-weight: 500;
   color: white;
 }
 
-.klio-more {
+.cleo-more {
   background: none;
   border: none;
   color: white;
@@ -48,7 +48,7 @@
   padding: 0;
 }
 
-.klio-content {
+.cleo-content {
   flex: 1;
   padding: 1.5rem;
   background-color: var(--card-background);
@@ -110,12 +110,12 @@
   color: white;
 }
 
-.klio-input {
+.cleo-input {
   padding: 1rem 1.5rem;
   border-top: 1px solid var(--border-color);
 }
 
-.klio-input input {
+.cleo-input input {
   width: 100%;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border-color);
@@ -125,7 +125,7 @@
   background: white;
 }
 
-.klio-input input:focus {
+.cleo-input input:focus {
   border-color: var(--primary-color);
 }
 
@@ -184,7 +184,7 @@
   cursor: not-allowed;
 }
 
-.klio-response {
+.cleo-response {
   margin-top: 16px;
   padding: 16px;
   background-color: var(--card-background);

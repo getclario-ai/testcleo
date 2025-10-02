@@ -171,14 +171,18 @@ class SlackMessageTemplates:
                 {
                     "type": "section",
                     "text": {"type": "mrkdwn", "text": 
-                        "*Basic Commands:*\n" +
-                        "• `/testlegacy help` - Show this help message\n" +
-                        "• `/testlegacy status` - Show drive health status\n" +
-                        "• `/testlegacy list` - List directories\n\n" +
+                        "*Immediate Insights:*\n" +
+                        "• `/grbg status` - Quick health score and urgent items\n" +
+                        "• `/grbg hot` - Show highest priority items right now\n\n" +
                         "*Analysis Commands:*\n" +
-                        "• `/testlegacy analyze [dir]` - Analyze a directory\n" +
-                        "• `/testlegacy summary [dir]` - Show directory summary\n" +
-                        "• `/testlegacy risks [dir]` - Show risk analysis"
+                        "• `/grbg analyze [dir] --quick` - Fast surface scan\n" +
+                        "• `/grbg analyze [dir] --deep` - Comprehensive analysis in dashboard\n" +
+                        "• `/grbg summary [dir] --risks` - Security-focused summary\n" +
+                        "• `/grbg summary [dir] --storage` - Storage-focused summary\n" +
+                        "• `/grbg summary [dir] --access` - Access patterns summary\n\n" +
+                        "*Intelligent Actions:*\n" +
+                        "• `/grbg suggest` - Get AI-powered recommendations\n" +
+                        "• `/grbg automate` - View/configure automatic actions"
                     }
                 }
             ]
@@ -303,12 +307,16 @@ class SlackService:
             command = parts[0].lower()
             args = parts[1:] if len(parts) > 1 else []
 
-            # Command handlers
+            # Command handlers for /grbg commands
             handlers = {
                 "help": self._handle_help,
                 "status": self._handle_status,
+                "hot": self._handle_hot,
                 "analyze": self._handle_analyze,
                 "summary": self._handle_summary,
+                "suggest": self._handle_suggest,
+                "automate": self._handle_automate,
+                # Legacy commands for backward compatibility
                 "list": self._handle_list,
                 "risks": self._handle_risks
             }
@@ -317,7 +325,7 @@ class SlackService:
             if not handler:
                 return {
                     "response_type": "ephemeral",
-                    "text": f"Unknown command: {command}. Try `/testlegacy help` for available commands."
+                    "text": f"Unknown command: {command}. Try `/grbg help` for available commands."
                 }
 
             return await handler(args, user_id, channel_id)
@@ -355,21 +363,73 @@ class SlackService:
         if not args:
             return {
                 "response_type": "ephemeral",
-                "text": "Please specify a directory to analyze. Usage: `/testlegacy analyze [directory]`"
+                "text": "Please specify a directory to analyze. Usage: `/grbg analyze [directory] [--quick|--deep]`"
             }
 
-        directory = " ".join(args)
+        # Parse directory and flags
+        directory_parts = []
+        flags = []
+        
+        for arg in args:
+            if arg.startswith('--'):
+                flags.append(arg)
+            else:
+                directory_parts.append(arg)
+        
+        if not directory_parts:
+            return {
+                "response_type": "ephemeral",
+                "text": "Please specify a directory to analyze. Usage: `/grbg analyze [directory] [--quick|--deep]`"
+            }
+        
+        directory = " ".join(directory_parts)
+        is_quick = '--quick' in flags
+        is_deep = '--deep' in flags
+        
         try:
-            # Start analysis in chat service
-            analysis_results = await self.chat_service.analyze_directory(directory)
-            
-            # Create summary from results
-            summary = self._create_analysis_summary(analysis_results)
-            
-            # Just point to the main dashboard
-            dashboard_url = f"{self.dashboard_base_url}"
-            
-            return self.templates.analyze_message(directory, summary, dashboard_url)
+            if is_quick:
+                # Quick surface scan - return basic stats only
+                stats = await self.chat_service.get_drive_stats()
+                return {
+                    "blocks": [
+                        {
+                            "type": "header",
+                            "text": {"type": "plain_text", "text": f"Quick Analysis: {directory} ⚡"}
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": 
+                                f"*Quick Stats:*\n" +
+                                f"• Total Files: {stats.get('total_files', 0)}\n" +
+                                f"• Sensitive Files: {stats.get('sensitive_files', 0)}\n" +
+                                f"• Old Files: {stats.get('old_files', 0)}\n" +
+                                f"• Storage Used: {stats.get('storage_used_percentage', 0)}%"
+                            }
+                        },
+                        {
+                            "type": "actions",
+                            "elements": [
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "Run Deep Analysis"},
+                                    "url": f"{self.dashboard_base_url}"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            else:
+                # Full analysis (default or --deep)
+                analysis_results = await self.chat_service.analyze_directory(directory)
+                summary = self._create_analysis_summary(analysis_results)
+                dashboard_url = f"{self.dashboard_base_url}"
+                
+                if is_deep:
+                    # For deep analysis, emphasize dashboard
+                    summary['is_cached'] = False  # Force fresh analysis
+                
+                return self.templates.analyze_message(directory, summary, dashboard_url)
+                
         except ValueError as e:
             logger.error(f"Value error in analyze command: {str(e)}")
             return {
@@ -393,16 +453,42 @@ class SlackService:
 
     async def _handle_summary(self, args: List[str], user_id: str, channel_id: str) -> Dict:
         try:
-            # Get directory from args if provided
-            directory = " ".join(args) if args else None
+            # Parse directory and flags
+            directory_parts = []
+            flags = []
+            
+            for arg in args:
+                if arg.startswith('--'):
+                    flags.append(arg)
+                else:
+                    directory_parts.append(arg)
+            
+            directory = " ".join(directory_parts) if directory_parts else None
+            summary_type = None
+            
+            # Determine summary type based on flags
+            if '--risks' in flags:
+                summary_type = 'risks'
+            elif '--storage' in flags:
+                summary_type = 'storage'
+            elif '--access' in flags:
+                summary_type = 'access'
             
             # Get summary statistics
             stats = await self.chat_service.get_summary_stats(directory)
-            
-            # Just point to the main dashboard
             dashboard_url = f"{self.dashboard_base_url}"
             
-            return self.templates.summary_message(stats, dashboard_url)
+            # Create specialized summary based on type
+            if summary_type == 'risks':
+                return self._create_risks_summary(stats, dashboard_url)
+            elif summary_type == 'storage':
+                return self._create_storage_summary(stats, dashboard_url)
+            elif summary_type == 'access':
+                return self._create_access_summary(stats, dashboard_url)
+            else:
+                # Default summary
+                return self.templates.summary_message(stats, dashboard_url)
+                
         except Exception as e:
             logger.error(f"Error in summary command: {str(e)}", exc_info=True)
             return {"response_type": "ephemeral", "text": f"Error getting summary: {str(e)}"}
@@ -470,44 +556,227 @@ class SlackService:
             logger.error(f"Error in risks command: {str(e)}", exc_info=True)
             return {"response_type": "ephemeral", "text": f"Error analyzing risks: {str(e)}"}
 
+    async def _handle_hot(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+        """Handle /grbg hot command - Show highest priority items right now"""
+        try:
+            # Get drive statistics from chat service
+            stats = await self.chat_service.get_drive_stats()
+            
+            # Get urgent items (highest priority)
+            urgent_items = self._get_urgent_items(stats)
+            
+            # Create hot items message
+            if not urgent_items:
+                return {
+                    "blocks": [
+                        {
+                            "type": "header",
+                            "text": {"type": "plain_text", "text": "🔥 Hot Items - All Clear!"}
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "No urgent items found. Your drive is in good shape! 🎉"}
+                        }
+                    ]
+                }
+            
+            # Format hot items with priority indicators
+            hot_items_text = "\n".join(f"🔥 {item}" for item in urgent_items)
+            
+            return {
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {"type": "plain_text", "text": "🔥 Hot Items - Immediate Attention Required"}
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": f"*Priority Items:*\n{hot_items_text}"}
+                    },
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "View Full Analysis"},
+                                "url": f"{self.dashboard_base_url}"
+                            }
+                        ]
+                    }
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Error in hot command: {str(e)}", exc_info=True)
+            return {"response_type": "ephemeral", "text": f"Error getting hot items: {str(e)}"}
+
+    async def _handle_suggest(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+        """Handle /grbg suggest command - Get AI-powered recommendations"""
+        try:
+            # Get drive statistics for recommendations
+            stats = await self.chat_service.get_drive_stats()
+            
+            # Generate recommendations based on stats
+            recommendations = self._generate_recommendations(stats)
+            
+            return {
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {"type": "plain_text", "text": "🤖 AI Recommendations"}
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": recommendations}
+                    },
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "View Detailed Analysis"},
+                                "url": f"{self.dashboard_base_url}"
+                            }
+                        ]
+                    }
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Error in suggest command: {str(e)}", exc_info=True)
+            return {"response_type": "ephemeral", "text": f"Error generating recommendations: {str(e)}"}
+
+    async def _handle_automate(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+        """Handle /grbg automate command - View/configure automatic actions"""
+        try:
+            # For now, show available automation options
+            automation_options = self._get_automation_options()
+            
+            return {
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {"type": "plain_text", "text": "⚙️ Automation Center"}
+                    },
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": automation_options}
+                    },
+                    {
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "Configure Automation"},
+                                "url": f"{self.dashboard_base_url}"
+                            }
+                        ]
+                    }
+                ]
+            }
+        except Exception as e:
+            logger.error(f"Error in automate command: {str(e)}", exc_info=True)
+            return {"response_type": "ephemeral", "text": f"Error accessing automation: {str(e)}"}
+
     def _calculate_health_score(self, stats: Dict[str, Any]) -> int:
-        # Implement health score calculation logic
-        # This is a placeholder implementation
-        base_score = 100
-        deductions = 0
+        """Calculate health score based on multiple factors with weighted scoring"""
+        weights = {
+            'sensitive_docs': 0.4,  # 40% weight - most important
+            'old_files': 0.3,       # 30% weight - important for cleanup
+            'storage_usage': 0.3    # 30% weight - important for capacity
+        }
         
-        # Deduct for sensitive files
-        sensitive_files = stats.get('sensitive_files', 0)
-        deductions += min(sensitive_files * 2, 30)
+        # Calculate individual scores (0-100 scale)
+        sensitive_score = self._score_sensitive_docs(stats.get('sensitive_files', 0))
+        old_files_score = self._score_old_files(stats.get('old_files', 0))
+        storage_score = self._score_storage(stats.get('storage_used_percentage', 0))
         
-        # Deduct for old files
-        old_files = stats.get('old_files', 0)
-        deductions += min(old_files, 20)
+        # Weighted average
+        total_score = (
+            sensitive_score * weights['sensitive_docs'] +
+            old_files_score * weights['old_files'] +
+            storage_score * weights['storage_usage']
+        )
         
-        # Deduct for storage usage
-        storage_used = stats.get('storage_used_percentage', 0)
-        if storage_used > 80:
-            deductions += 10
-        elif storage_used > 60:
-            deductions += 5
-        
-        return max(base_score - deductions, 0)
+        return int(round(total_score))
+
+    def _score_sensitive_docs(self, sensitive_count: int) -> int:
+        """Score based on sensitive documents (0-100, higher is better)"""
+        if sensitive_count == 0:
+            return 100
+        elif sensitive_count <= 5:
+            return 80
+        elif sensitive_count <= 10:
+            return 60
+        elif sensitive_count <= 20:
+            return 40
+        else:
+            return 20
+
+    def _score_old_files(self, old_files_count: int) -> int:
+        """Score based on old files (0-100, higher is better)"""
+        if old_files_count == 0:
+            return 100
+        elif old_files_count <= 10:
+            return 90
+        elif old_files_count <= 25:
+            return 70
+        elif old_files_count <= 50:
+            return 50
+        elif old_files_count <= 100:
+            return 30
+        else:
+            return 10
+
+    def _score_storage(self, storage_percentage: float) -> int:
+        """Score based on storage usage (0-100, higher is better)"""
+        if storage_percentage <= 50:
+            return 100
+        elif storage_percentage <= 70:
+            return 80
+        elif storage_percentage <= 80:
+            return 60
+        elif storage_percentage <= 90:
+            return 40
+        else:
+            return 20
 
     def _get_urgent_items(self, stats: Dict[str, Any]) -> List[str]:
+        """Get urgent items that need immediate attention, prioritized by severity"""
         urgent_items = []
         
         sensitive_files = stats.get('sensitive_files', 0)
-        if sensitive_files > 0:
-            urgent_items.append(f"🔒 {sensitive_files} sensitive files need review")
-            
         old_files = stats.get('old_files', 0)
-        if old_files > 0:
-            urgent_items.append(f"📅 {old_files} files are over 3 years old")
-            
         storage_used = stats.get('storage_used_percentage', 0)
-        if storage_used > 80:
+        total_files = stats.get('total_files', 0)
+        
+        # High priority: Security issues
+        if sensitive_files > 0:
+            if sensitive_files > 10:
+                urgent_items.append(f"🚨 CRITICAL: {sensitive_files} sensitive files need immediate review")
+            elif sensitive_files > 5:
+                urgent_items.append(f"🔒 HIGH: {sensitive_files} sensitive files need review")
+            else:
+                urgent_items.append(f"🔒 {sensitive_files} sensitive files need review")
+        
+        # Medium priority: Storage issues
+        if storage_used > 90:
+            urgent_items.append(f"💾 CRITICAL: Storage at {storage_used}% - immediate cleanup needed")
+        elif storage_used > 80:
+            urgent_items.append(f"💾 HIGH: Storage at {storage_used}% - cleanup recommended")
+        elif storage_used > 70:
             urgent_items.append(f"💾 Storage usage is at {storage_used}%")
-            
+        
+        # Lower priority: Old files (only if significant)
+        if old_files > 50:
+            urgent_items.append(f"📅 {old_files} files are over 3 years old - consider archiving")
+        elif old_files > 20:
+            urgent_items.append(f"📅 {old_files} files are over 3 years old")
+        
+        # Additional insights
+        if total_files > 0:
+            old_ratio = (old_files / total_files) * 100
+            if old_ratio > 50:
+                urgent_items.append(f"📊 {old_ratio:.1f}% of files are outdated")
+        
         return urgent_items
 
     def _create_analysis_summary(self, results: Dict[str, Any]) -> Dict[str, Any]:
@@ -582,6 +851,161 @@ class SlackService:
             f"• Low Risk: {risks.get('low_risk', 0)}\n\n" +
             "*Top Concerns:*\n" +
             "\n".join(f"• {concern}" for concern in risks.get('top_concerns', []))
+        )
+
+    def _create_risks_summary(self, stats: Dict[str, Any], dashboard_url: str) -> Dict:
+        """Create a security-focused summary"""
+        sensitive_files = stats.get('sensitive_files', 0)
+        old_files = stats.get('old_files', 0)
+        total_files = stats.get('total_files', 0)
+        
+        risk_level = "Low"
+        if sensitive_files > 10 or old_files > 50:
+            risk_level = "High"
+        elif sensitive_files > 0 or old_files > 20:
+            risk_level = "Medium"
+        
+        return {
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "Security Summary 🔒"}
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": 
+                        f"*Risk Level:* {risk_level}\n" +
+                        f"*Sensitive Files:* {sensitive_files}\n" +
+                        f"*Old Files (>3y):* {old_files}\n" +
+                        f"*Total Files:* {total_files}"
+                    }
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "View Security Details"},
+                            "url": dashboard_url
+                        }
+                    ]
+                }
+            ]
+        }
+
+    def _create_storage_summary(self, stats: Dict[str, Any], dashboard_url: str) -> Dict:
+        """Create a storage-focused summary"""
+        storage_used = stats.get('storage_used_percentage', 0)
+        total_files = stats.get('total_files', 0)
+        
+        storage_status = "Good"
+        if storage_used > 80:
+            storage_status = "Critical"
+        elif storage_used > 60:
+            storage_status = "Warning"
+        
+        return {
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "Storage Summary 💾"}
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": 
+                        f"*Storage Status:* {storage_status}\n" +
+                        f"*Storage Used:* {storage_used}%\n" +
+                        f"*Total Files:* {total_files}"
+                    }
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "View Storage Details"},
+                            "url": dashboard_url
+                        }
+                    ]
+                }
+            ]
+        }
+
+    def _create_access_summary(self, stats: Dict[str, Any], dashboard_url: str) -> Dict:
+        """Create an access patterns summary"""
+        total_files = stats.get('total_files', 0)
+        old_files = stats.get('old_files', 0)
+        
+        # Calculate access patterns (placeholder logic)
+        recent_access = total_files - old_files
+        access_ratio = (recent_access / total_files * 100) if total_files > 0 else 0
+        
+        return {
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "Access Patterns Summary 📊"}
+                },
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": 
+                        f"*Recent Access:* {recent_access} files\n" +
+                        f"*Access Ratio:* {access_ratio:.1f}%\n" +
+                        f"*Total Files:* {total_files}"
+                    }
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {
+                            "type": "button",
+                            "text": {"type": "plain_text", "text": "View Access Details"},
+                            "url": dashboard_url
+                        }
+                    ]
+                }
+            ]
+        }
+
+    def _generate_recommendations(self, stats: Dict[str, Any]) -> str:
+        """Generate AI-powered recommendations based on drive statistics"""
+        recommendations = []
+        
+        sensitive_files = stats.get('sensitive_files', 0)
+        old_files = stats.get('old_files', 0)
+        storage_used = stats.get('storage_used_percentage', 0)
+        
+        if sensitive_files > 0:
+            recommendations.append(f"🔒 *Security Priority:* Review {sensitive_files} sensitive files")
+        
+        if old_files > 10:
+            recommendations.append(f"📅 *Cleanup Opportunity:* Archive {old_files} files older than 3 years")
+        elif old_files > 0:
+            recommendations.append(f"📅 *Maintenance:* Consider reviewing {old_files} old files")
+        
+        if storage_used > 80:
+            recommendations.append(f"💾 *Storage Alert:* Drive is {storage_used}% full - consider cleanup")
+        elif storage_used > 60:
+            recommendations.append(f"💾 *Storage Watch:* Drive is {storage_used}% full - monitor usage")
+        
+        if not recommendations:
+            recommendations.append("✅ *All Good:* Your drive is well-organized and secure!")
+        
+        return "\n".join(recommendations)
+
+    def _get_automation_options(self) -> str:
+        """Get available automation options"""
+        return (
+            "*Available Automations:*\n" +
+            "• 🔄 Auto-archive files older than 3 years\n" +
+            "• 🔒 Flag sensitive documents for review\n" +
+            "• 📊 Weekly storage usage reports\n" +
+            "• 🚨 Alert on unusual access patterns\n" +
+            "• 🗑️ Suggest duplicate file removal\n\n" +
+            "*Coming Soon:*\n" +
+            "• 📅 Scheduled cleanup workflows\n" +
+            "• 🤖 AI-powered content categorization\n" +
+            "• 📧 Email digest notifications"
         )
 
     async def send_message(self, channel: str, text: str) -> None:

@@ -30,13 +30,13 @@ const Auth = ({ onAuthSuccess }) => {
   return (
     <div className="auth-container">
       <div className="auth-content">
-        <h1>Hi, I am Klio</h1>
+        <h1>Hi, I am Cleo</h1>
         <p>How can I assist you with your legacy data today?</p>
         <button onClick={handleAuth} className="auth-button">
           Connect with Google Drive
         </button>
         <p className="auth-note">
-          Klio needs access to your Google Drive to help you manage and analyze your files.
+          Cleo needs access to your Google Drive to help you manage and analyze your files.
         </p>
       </div>
     </div>

@@ -272,7 +272,14 @@ async def analyze_directory(
             
             # Cache the results
             scan_cache.update_cache(folder_id, response)
-            logger.info(f"Cached scan results for directory {folder_id}")
+            
+            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
+                if age_group in response and "sensitive_info" in response[age_group]:
+                    for category, findings in response[age_group]["sensitive_info"].items():
+                        if findings:
+                            # Print first file's risk data
+                            if findings and findings[0].get("file"):
+                                file_data = findings[0]["file"]
             
             return response
         except Exception as e:
@@ -323,4 +330,16 @@ async def list_directories(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
-        ) 
+        )
+
+# Debug endpoint to receive frontend debug messages
+@router.post("/debug/log")
+async def debug_log(request: Request):
+    """Debug endpoint to receive frontend debug messages and log them to terminal"""
+    try:
+        data = await request.json()
+        if 'data' in data:
+        return {"status": "logged"}
+    except Exception as e:
+        logger.error(f"Error logging debug message: {e}")
+        return {"status": "error"} 

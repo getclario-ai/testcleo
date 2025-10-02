@@ -7,9 +7,16 @@ import './FileInsightsDashboard.css';
 const defaultStats = {
   totalFiles: 0,
   totalStorage: 0,
+  totalStorageBytes: 0,
   staleFiles: 0,
   sensitiveFiles: 0,
   topOwners: [],
+  docCount: 0,
+  ageDistribution: {
+    moreThanThreeYears: { types: {}, risks: {} },
+    oneToThreeYears: { types: {}, risks: {} },
+    lessThanOneYear: { types: {}, risks: {} }
+  }
 };
 
 // Add a helper function to format bytes to the largest unit
@@ -47,6 +54,16 @@ const FileInsightsDashboard = () => {
       if (location.state.stats) localStorage.setItem('fid_stats', JSON.stringify(location.state.stats));
     }
   }, [location.state]);
+
+  // Save stats to localStorage when they change
+  useEffect(() => {
+    if (stats && stats.totalFiles > 0) {
+      console.log('Saving updated stats to localStorage:', stats);
+      localStorage.setItem('fid_stats', JSON.stringify(stats));
+      // Also clear any restoration flag to ensure fresh navigation
+      window.attemptedContextRestore = false;
+    }
+  }, [stats]);
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -182,12 +199,36 @@ const FileInsightsDashboard = () => {
             className="insight-action"
             disabled={stats.sensitiveFiles === 0}
             onClick={() => {
+              // Debug: Log context before navigation
+              console.log('=== DEBUG: Navigation to review-sensitive-files ===');
+              console.log('Stats before navigation:', stats);
+              console.log('Selected directory:', location.state?.selectedDirectory || JSON.parse(localStorage.getItem('fid_selectedDirectory') || 'null'));
+              
+              // Always ensure context is in localStorage before navigation
+              localStorage.setItem('fid_stats', JSON.stringify(stats));
+              if (location.state?.selectedDirectory) {
+                localStorage.setItem('fid_selectedDirectory', JSON.stringify(location.state.selectedDirectory));
+              }
+              
+              // Save the current route with state for later restoration
+              localStorage.setItem('fid_lastRoute', JSON.stringify({
+                pathname: '/review-sensitive-files',
+                state: {
+                  selectedDirectory: location.state?.selectedDirectory || JSON.parse(localStorage.getItem('fid_selectedDirectory') || 'null'),
+                  activeTab: ageGroup || (location.state?.activeTab) || 'moreThanThreeYears',
+                  stats: stats,
+                  directoryId: directoryId,
+                  returnTo: location.pathname
+                }
+              }));
+              
+              // Navigate to review page
               navigate('/review-sensitive-files', {
                 state: {
                   selectedDirectory: location.state?.selectedDirectory || JSON.parse(localStorage.getItem('fid_selectedDirectory') || 'null'),
                   activeTab: ageGroup || (location.state?.activeTab) || 'moreThanThreeYears',
-                  stats,
-                  directoryId,
+                  stats: stats,
+                  directoryId: directoryId,
                   returnTo: location.pathname
                 }
               });

@@ -7,7 +7,7 @@ const Dashboard = ({ selectedDirectory, dashboardState, setDashboardState }) => 
       case 'welcome':
         return (
           <div className="welcome-message">
-            <h2>Welcome to Klio</h2>
+            <h2>Welcome to Cleo</h2>
             <p>Use the command interface to interact with your data.</p>
           </div>
         );
@@ -39,7 +39,7 @@ const Dashboard = ({ selectedDirectory, dashboardState, setDashboardState }) => 
       default:
         return (
           <div className="welcome-message">
-            <h2>Welcome to Klio</h2>
+            <h2>Welcome to Cleo</h2>
             <p>Use the command interface to interact with your data.</p>
           </div>
         );

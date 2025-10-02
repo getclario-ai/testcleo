@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocat
 import AuthCallback from './components/AuthCallback';
 import DirectoryList from './components/DirectoryList';
 import DirectoryExplorer from './components/DirectoryExplorer';
-import Klio from './components/Klio';
+import Cleo from './components/Cleo';
 import SensitiveContent from './components/SensitiveContent';
 import FileCategoryDetails from './components/FileCategoryDetails';
 import FileInsightsDashboard from './components/FileInsightsDashboard';
@@ -17,14 +17,14 @@ function AppContent() {
   const location = useLocation();
   const [selectedDirectory, setSelectedDirectory] = useState(() => {
     // Try to restore state from location or localStorage
-    return location.state?.selectedDirectory || JSON.parse(localStorage.getItem('selectedDirectory')) || null;
+    return location.state?.selectedDirectory || JSON.parse(localStorage.getItem('fid_selectedDirectory')) || null;
   });
   const [activeTab, setActiveTab] = useState(() => {
-    return location.state?.activeTab || 'moreThanThreeYears';
+    return location.state?.activeTab || localStorage.getItem('fid_activeTab') || 'moreThanThreeYears';
   });
   const [typeSort, setTypeSort] = useState('count'); // 'count' or 'size'
   const [stats, setStats] = useState(() => {
-    return location.state?.stats || JSON.parse(localStorage.getItem('stats')) || {
+    return location.state?.stats || JSON.parse(localStorage.getItem('fid_stats')) || {
       docCount: 0,
       duplicateDocuments: 0,
       sensitiveDocuments: 0,
@@ -39,20 +39,27 @@ function AppContent() {
   // Save state to localStorage when it changes
   useEffect(() => {
     if (selectedDirectory) {
-      localStorage.setItem('selectedDirectory', JSON.stringify(selectedDirectory));
+      localStorage.setItem('fid_selectedDirectory', JSON.stringify(selectedDirectory));
     }
   }, [selectedDirectory]);
 
-  const handleKlioCommand = (command) => {
+  // Save stats to localStorage when they change
+  useEffect(() => {
+    if (stats) {
+      localStorage.setItem('fid_stats', JSON.stringify(stats));
+    }
+  }, [stats]);
+
+  const handleCleoCommand = (command) => {
     switch (command.name.toLowerCase()) {
       case 'list directories':
-        // Just trigger the directory listing in Klio
+        // Just trigger the directory listing in Cleo
         break;
       case 'analyze':
-        // Analysis will be handled by Klio component
+        // Analysis will be handled by Cleo component
         break;
       case 'clean':
-        // Cleaning command will be handled by Klio component
+        // Cleaning command will be handled by Cleo component
         break;
       default:
         console.warn('Unknown command:', command.name);
@@ -136,6 +143,20 @@ function AppContent() {
 
   const handleViewFileCategoryDetails = (fileType) => {
     navigate(`/file-category/${activeTab}/${fileType}`, {
+      state: {
+        selectedDirectory,
+        activeTab,
+        stats,
+        returnTo: location.pathname,
+        directoryId: selectedDirectory?.id
+      }
+    });
+  };
+
+  // Add the sensitive documents click handler
+  const handleSensitiveDocumentsClick = () => {
+    console.log('Sensitive documents tile clicked!');
+    navigate('/sensitive-content', {
       state: {
         selectedDirectory,
         activeTab,
@@ -352,8 +373,53 @@ function AppContent() {
               Please run analysis first by using the analyze command in chat.
             </div>
           </div>
-    </div>
+        </div>
       );
+    }
+
+    // Process risks to deduplicate files across categories
+    const processedRisks = {};
+    if (risks && Object.keys(risks).length > 0) {
+      // First, collect all unique files per category
+      const categoryFiles = {};
+      Object.entries(risks).forEach(([category, riskData]) => {
+        if (riskData && riskData.files && Array.isArray(riskData.files)) {
+          const uniqueFiles = new Set();
+          riskData.files.forEach(finding => {
+            if (finding.file && finding.file.id) {
+              uniqueFiles.add(finding.file.id);
+            }
+          });
+          categoryFiles[category] = uniqueFiles.size;
+        }
+      });
+
+      // Calculate percentages based on total unique files across all categories
+      const totalUniqueFiles = new Set();
+      Object.values(risks).forEach(riskData => {
+        if (riskData && riskData.files && Array.isArray(riskData.files)) {
+          riskData.files.forEach(finding => {
+            if (finding.file && finding.file.id) {
+              totalUniqueFiles.add(finding.file.id);
+            }
+          });
+        }
+      });
+      const totalFiles = totalUniqueFiles.size;
+
+      // Create processed risks with deduplicated counts
+      Object.entries(risks).forEach(([category, riskData]) => {
+        if (riskData && riskData.files && Array.isArray(riskData.files)) {
+          const uniqueCount = categoryFiles[category] || 0;
+          const percentage = totalFiles > 0 ? (uniqueCount / totalFiles * 100) : 0;
+          
+          processedRisks[category] = {
+            count: uniqueCount,
+            percentage: percentage,
+            files: riskData.files // Keep original files for detailed view
+          };
+        }
+      });
     }
     
     return (
@@ -407,7 +473,7 @@ function AppContent() {
         <div className="section-content">
           <h4>Risk Categories</h4>
           <div className="type-bars">
-            {Object.entries(risks)
+            {Object.entries(processedRisks)
               .filter(([_, stats]) => stats.count > 0)
               .sort((a, b) => b[1].count - a[1].count)
               .map(([category, stats]) => {
@@ -535,6 +601,7 @@ function AppContent() {
   return (
     <Routes>
       <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/sensitive-content" element={<SensitiveContent />} />
       <Route path="/sensitive-content/:ageGroup/:category" element={<RiskCategoryInsightsDashboard />} />
       <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
       <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />
@@ -543,7 +610,8 @@ function AppContent() {
         element={
           <div className="app-container">
             <header className="app-header">
-              <h1>Welcome to Papyrux</h1>
+              <h1>Clario</h1>
+              <h2>Smart Structured Secure</h2>
             </header>
             <div className="app-content">
               <div className="dashboard-section">
@@ -557,7 +625,12 @@ function AppContent() {
                       </div>
                       <div className="stat-label">Files scanned</div>
                     </div>
-                    <div className="stat-card" title="Documents that may contain sensitive information">
+                    <div 
+                      className="stat-card clickable" 
+                      title="Documents that may contain sensitive information"
+                      onClick={handleSensitiveDocumentsClick}
+                      style={{ cursor: 'pointer' }}
+                    >
                       <div className="stat-number">
                         {stats?.sensitiveDocuments != null ? stats.sensitiveDocuments.toLocaleString() : 0}
                         {stats.sensitiveDocuments > 0 && <span className="trend-warning">!</span>}
@@ -642,9 +715,9 @@ function AppContent() {
                 </div>
               </div>
 
-              <div className="klio-section">
-                <Klio 
-                  onCommand={handleKlioCommand}
+              <div className="cleo-section">
+                <Cleo 
+                  onCommand={handleCleoCommand}
                   onStatsUpdate={handleStatsUpdate}
                 />
               </div>
@@ -661,6 +734,7 @@ function App() {
     <Router>
       <Routes>
         <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route path="/sensitive-content" element={<SensitiveContent />} />
         <Route path="/sensitive-content/:ageGroup/:category" element={<RiskCategoryInsightsDashboard />} />
         <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
         <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />

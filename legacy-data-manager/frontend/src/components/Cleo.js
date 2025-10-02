@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import config from '../config';
-import '../styles/Klio.css';
+import '../styles/Cleo.css';
 
-const klioCommands = [
+const cleoCommands = [
   { name: 'List Directories', description: 'Show available directories' },
   { name: 'Analyze', description: 'Analyze selected directory' },
   { name: 'Clean', description: 'Clean up selected directory' }
@@ -17,7 +17,7 @@ const analysisOptions = [
   { id: 'filetype', name: 'File Type', enabled: true }
 ];
 
-const Klio = ({ onCommand, onStatsUpdate }) => {
+const Cleo = ({ onCommand, onStatsUpdate }) => {
   const [message, setMessage] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [directories, setDirectories] = useState([]);
@@ -35,7 +35,7 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
   
   const location = useLocation();
 
-  console.log('Klio component state:', {
+  console.log('Cleo component state:', {
     isConnected,
     isLoading,
     showDirectorySelection,
@@ -68,7 +68,7 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
     }
     
     // Check connection status on mount
-    console.log('Klio component mounted, checking connection...');
+    console.log('Cleo component mounted, checking connection...');
     const initializeConnection = async () => {
       try {
         const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/status`, {
@@ -232,7 +232,9 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
       });
       setIsLoading(true);
       
-      const analyzeUrl = `${config.apiBaseUrl}/api/v1/drive/directories/${directory.id}/analyze`;
+      // Add cache-busting parameter to force fresh data
+      const timestamp = Date.now();
+      const analyzeUrl = `${config.apiBaseUrl}/api/v1/drive/directories/${directory.id}/analyze?t=${timestamp}`;
       console.log('Making analyze request to:', analyzeUrl);
       
       const response = await fetch(analyzeUrl, {
@@ -269,6 +271,10 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
       const data = await response.json();
       console.log('Raw analysis data received:', data);
       
+      // Clear any cached stats to ensure fresh data
+      localStorage.removeItem('fid_stats');
+      localStorage.removeItem('rcid_stats');
+      
       // Calculate total sensitive documents across all age groups
       const totalSensitiveDocuments = [
         data.moreThanThreeYears?.total_sensitive || 0,
@@ -289,7 +295,16 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
         }
       };
       
+      // DEBUG: Log the transformation process
+      console.log('=== DEBUG: Cleo transformAgeGroup ===');
+      console.log('Raw backend data:', data);
       console.log('Transformed data before sending to parent:', transformedData);
+      console.log('=== END DEBUG ===');
+
+      console.debug('***** === DEBUG: Cleo transformAgeGroup ===');
+      console.debug('***** Raw backend data:', data);
+      console.debug('***** Transformed data before sending to parent:', transformedData);
+      console.debug('***** === END DEBUG ===');
       
       // Pass the transformed data to the parent component
       onStatsUpdate(transformedData);
@@ -344,22 +359,62 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
       });
     }
 
-    // Transform risks
+    // Transform risks with proper deduplication
+    // This fixes the discrepancy between home screen and sensitive content overview counts
+    // Previously used raw findings.length which counted duplicate files multiple times
     const risks = {};
     if (groupData.sensitive_info) {
-      // Calculate total findings for percentage
-      const totalFindings = Object.values(groupData.sensitive_info)
-        .reduce((sum, findings) => sum + (Array.isArray(findings) ? findings.length : 0), 0);
-
+      // First, collect all unique files per category (same logic as App.js)
+      const categoryFiles = {};
       Object.entries(groupData.sensitive_info).forEach(([category, findings]) => {
         if (Array.isArray(findings)) {
+          const uniqueFiles = new Set();
+          findings.forEach(finding => {
+            if (finding.file && finding.file.id) {
+              uniqueFiles.add(finding.file.id);
+            }
+          });
+          categoryFiles[category] = uniqueFiles.size;
+        }
+      });
+
+      // Calculate total unique files across all categories for percentage calculation
+      const totalUniqueFiles = new Set();
+      Object.values(groupData.sensitive_info).forEach(findings => {
+        if (Array.isArray(findings)) {
+          findings.forEach(finding => {
+            if (finding.file && finding.file.id) {
+              totalUniqueFiles.add(finding.file.id);
+            }
+          });
+        }
+      });
+      const totalFiles = totalUniqueFiles.size;
+
+      // Create processed risks with deduplicated counts
+      Object.entries(groupData.sensitive_info).forEach(([category, findings]) => {
+        if (Array.isArray(findings)) {
+          const uniqueCount = categoryFiles[category] || 0;
+          const percentage = totalFiles > 0 ? Math.round((uniqueCount / totalFiles) * 100) : 0;
+          
+          // DEBUG: Log risk data transformation
+          console.log(`=== DEBUG: transformAgeGroup processing ${category} ===`);
+          console.log(`Category: ${category}, Findings count: ${findings.length}, Unique count: ${uniqueCount}`);
+          if (findings.length > 0) {
+            console.log('First finding file data:', findings[0].file);
+            console.log('Risk level data:', {
+              riskLevel: findings[0].file?.riskLevel,
+              riskLevelLabel: findings[0].file?.riskLevelLabel
+            });
+          }
+          
           risks[category] = {
-            count: findings.length,
-            files: findings,
+            count: uniqueCount,
+            files: findings, // Keep original files for detailed view
             confidence: findings.length > 0 
               ? findings.reduce((sum, finding) => sum + (finding.confidence || 0.8), 0) / findings.length 
               : 0,
-            percentage: totalFindings > 0 ? Math.round((findings.length / totalFindings) * 100) : 0
+            percentage: percentage
           };
         }
       });
@@ -485,16 +540,16 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
   };
 
   return (
-    <div className="klio-container">
-      <div className="klio-header">
-        <div className="klio-header-left">
-          <div className="klio-avatar">K</div>
-          <div className="klio-name">Klio</div>
+    <div className="cleo-container">
+      <div className="cleo-header">
+        <div className="cleo-header-left">
+          <div className="cleo-avatar">K</div>
+          <div className="cleo-name">Cleo</div>
         </div>
-        <button className="klio-more">⋯</button>
+        <button className="cleo-more">⋯</button>
       </div>
       
-      <div className="klio-content">
+      <div className="cleo-content">
         <div className="chat-messages">
           {messages.map((msg, index) => (
             <div key={index} className={`message ${msg.type}`}>
@@ -515,7 +570,7 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
         ) : (
           <>
             <div className="command-buttons">
-              {klioCommands.map((cmd) => (
+              {cleoCommands.map((cmd) => (
                 <button
                   key={cmd.name}
                   className="command-button"
@@ -567,7 +622,7 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
         )}
       </div>
       
-      <form onSubmit={handleMessageSubmit} className="klio-input">
+      <form onSubmit={handleMessageSubmit} className="cleo-input">
         <input
           type="text"
           placeholder="Type a message..."
@@ -579,4 +634,4 @@ const Klio = ({ onCommand, onStatsUpdate }) => {
   );
 };
 
-export default Klio; 
+export default Cleo; 

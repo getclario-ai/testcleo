@@ -18,9 +18,49 @@ const defaultStats = {
 const ReviewSensitiveFiles = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  // Robust context restoration
-  const stats = location.state?.stats || JSON.parse(localStorage.getItem('stats')) || defaultStats;
-  const selectedDirectory = location.state?.selectedDirectory || JSON.parse(localStorage.getItem('selectedDirectory')) || null;
+  // Route context restoration
+  useEffect(() => {
+    // Save the current route and state to localStorage
+    localStorage.setItem('fid_lastRoute', JSON.stringify({
+      pathname: location.pathname,
+      state: location.state
+    }));
+  }, [location.pathname, location.state]);
+
+  // On mount, add more detailed logging
+  useEffect(() => {
+    // Do not attempt to restore context or navigate if we're already on the page
+    // This prevents infinite loops of redirects when context is missing
+    // eslint-disable-next-line
+  }, []);
+
+  // Parse stats safely with defensive default values
+  let parsedStats = defaultStats;
+  try {
+    if (location.state?.stats) {
+      parsedStats = location.state.stats;
+    } else if (localStorage.getItem('fid_stats')) {
+      parsedStats = JSON.parse(localStorage.getItem('fid_stats'));
+    }
+  } catch (e) {
+    console.error('Error parsing stats from localStorage:', e);
+  }
+  
+  // Parse selectedDirectory safely
+  let parsedSelectedDirectory = null;
+  try {
+    if (location.state?.selectedDirectory) {
+      parsedSelectedDirectory = location.state.selectedDirectory;
+    } else if (localStorage.getItem('fid_selectedDirectory')) {
+      parsedSelectedDirectory = JSON.parse(localStorage.getItem('fid_selectedDirectory'));
+    }
+  } catch (e) {
+    console.error('Error parsing selectedDirectory from localStorage:', e);
+  }
+  
+  // Use the safely parsed values
+  const stats = parsedStats;
+  const selectedDirectory = parsedSelectedDirectory;
   const directoryId = location.state?.directoryId || selectedDirectory?.id;
   const returnTo = location.state?.returnTo || '/';
   const [files, setFiles] = useState([]);
@@ -32,9 +72,8 @@ const ReviewSensitiveFiles = () => {
   const filesPerPage = 20;
 
   useEffect(() => {
-    // Save context to localStorage
-    if (stats) localStorage.setItem('stats', JSON.stringify(stats));
-    if (selectedDirectory) localStorage.setItem('selectedDirectory', JSON.stringify(selectedDirectory));
+    if (stats) localStorage.setItem('fid_stats', JSON.stringify(stats));
+    if (selectedDirectory) localStorage.setItem('fid_selectedDirectory', JSON.stringify(selectedDirectory));
   }, [stats, selectedDirectory]);
 
   useEffect(() => {
@@ -53,8 +92,18 @@ const ReviewSensitiveFiles = () => {
         } else {
           url = `${config.apiBaseUrl}/api/v1/drive/analyze`;
         }
+        
+        console.log('Fetching analysis data from:', url);
         const response = await axios.post(url);
+        console.log('Analysis response:', response.status, response.statusText);
+        
+        if (!response.data) {
+          throw new Error('Empty response from server');
+        }
+        
         const data = response.data;
+        console.log('Analysis data structure:', Object.keys(data));
+        
         // Collect all sensitive files across all age groups and categories
         const ageGroups = ['moreThanThreeYears', 'oneToThreeYears', 'lessThanOneYear'];
         let allFiles = [];
@@ -114,6 +163,15 @@ const ReviewSensitiveFiles = () => {
   };
 
   const handleBack = () => {
+    // Use lastRoute if available
+    const lastRoute = localStorage.getItem('fid_lastRoute');
+    if (lastRoute) {
+      const { pathname, state } = JSON.parse(lastRoute);
+      if (pathname && state) {
+        navigate(pathname, { state });
+        return;
+      }
+    }
     navigate(returnTo, {
       state: {
         selectedDirectory,
@@ -127,20 +185,10 @@ const ReviewSensitiveFiles = () => {
     return files.slice(start, start + filesPerPage);
   };
 
-  // Defensive rendering for missing context
-  if (!stats || !('docCount' in stats)) {
-    return (
-      <div className="sensitive-content-container">
-        <div className="error-message">
-          <p>Missing dashboard context. Please return to the dashboard and run analysis again.</p>
-          <button onClick={handleBack} className="back-button">
-            Go Back
-          </button>
-        </div>
-      </div>
-    );
-  }
-
+  // MODIFY this block to render differently if context is missing
+  // Instead of blocking rendering, show warning with dashboard link
+  const missingContext = !stats || !('docCount' in stats);
+  
   if (loading) {
     return (
       <div className="sensitive-content-container">
@@ -154,8 +202,8 @@ const ReviewSensitiveFiles = () => {
       <div className="sensitive-content-container">
         <div className="error-message">
           <p>{error}</p>
-          <button onClick={handleBack} className="back-button">
-            Go Back
+          <button onClick={() => navigate('/')} className="back-button">
+            Return to Dashboard
           </button>
         </div>
       </div>
@@ -164,6 +212,22 @@ const ReviewSensitiveFiles = () => {
 
   return (
     <div className="sensitive-content-container">
+      {missingContext && (
+        <div className="warning-banner">
+          <p>Missing dashboard context. Please return to the dashboard and run analysis again.</p>
+          <button 
+            onClick={() => {
+              // Clear attempted flag before returning
+              window.attemptedContextRestore = false;
+              navigate('/', { replace: true });
+            }} 
+            className="dashboard-button"
+          >
+            Return to Dashboard
+          </button>
+        </div>
+      )}
+      
       <div className="sensitive-content-header">
         <div className="header-left">
           <button onClick={handleBack} className="back-button">
