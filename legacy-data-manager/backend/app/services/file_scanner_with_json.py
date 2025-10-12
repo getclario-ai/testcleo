@@ -455,7 +455,7 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
 
     elif source == 'gdrive' and HAS_GOOGLE_API:
         drive_service = GoogleDriveService()
-        if not drive_service.is_authenticated():
+        if not await drive_service.is_authenticated():
             raise ValueError("Not authenticated with Google Drive")
 
         try:
@@ -659,8 +659,8 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
             medium_risk_files = sum(1 for data in file_sensitivity.values() if data.get('riskLevelLabel') == 'medium')
             low_risk_files = sum(1 for data in file_sensitivity.values() if data.get('riskLevelLabel') == 'low')
             
-            logger.log(f"Risk distribution summary: High={high_risk_files}, Medium={medium_risk_files}, Low={low_risk_files}")
-            logger.log(f"Total sensitive files processed: {total_files}")
+            logger.info(f"Risk distribution summary: High={high_risk_files}, Medium={medium_risk_files}, Low={low_risk_files}")
+            logger.info(f"Total sensitive files processed: {total_files}")
        
         except Exception as e:
             logger.error(f"Error scanning files: {str(e)}")

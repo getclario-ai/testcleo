@@ -339,6 +339,7 @@ async def debug_log(request: Request):
     try:
         data = await request.json()
         if 'data' in data:
+            logger.info(f"Frontend Debug: {data['data']}")
         return {"status": "logged"}
     except Exception as e:
         logger.error(f"Error logging debug message: {e}")
