@@ -27,65 +27,85 @@ const SensitiveContent = () => {
   const [selectedFiles, setSelectedFiles] = useState(new Set());
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  // No department assignment state variables needed
   const filesPerPage = 20;
 
-  // --- Extract all sensitive files from the full stats (not just paginated files) ---
+  // --- Extract all sensitive files from the full stats using the new flattened structure ---
   const allSensitiveFiles = React.useMemo(() => {
-    if (!stats) return [];    
+    if (!stats) return [];
+    
     // Send debug info to backend to see in terminal
-    if (stats && stats.ageDistribution) {
-      fetch('http://localhost:8000/api/v1/debug/log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          component: 'SensitiveContent',
-          message: 'Processing stats structure',
-          data: { stats: stats, ageDistribution: stats.ageDistribution }
-        })
-      }).catch(() => {}); // Ignore errors
+    fetch('http://localhost:8000/api/v1/debug/log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        component: 'SensitiveContent',
+        message: 'Processing stats structure',
+        data: { stats }
+      })
+    }).catch(() => {}); // Ignore errors
+    
+    // Check if we're using the new flattened structure
+    if (stats.files && Array.isArray(stats.files)) {
+      console.log('Using new flattened file structure with', stats.files.length, 'files');
+      
+      // Filter only sensitive files (files with sensitiveCategories)
+      const sensitiveFiles = stats.files.filter(file => 
+        file.sensitiveCategories && 
+        Array.isArray(file.sensitiveCategories) && 
+        file.sensitiveCategories.length > 0
+      );
+      
+      console.log('Found', sensitiveFiles.length, 'sensitive files');
+      return sensitiveFiles;
+    } 
+    // Fallback to old structure for backward compatibility
+    else if (stats.ageDistribution) {
+      console.log('Using legacy structure with age distribution');
+      const sensitiveFiles = [];
+      const ageGroups = ['moreThanThreeYears', 'oneToThreeYears', 'lessThanOneYear'];
+      
+      ageGroups.forEach(ageGroup => {
+        const ageData = stats.ageDistribution?.[ageGroup];
+        console.log(`Processing age group: ${ageGroup}`, ageData);
+        
+        if (ageData && ageData.risks) {
+          Object.entries(ageData.risks).forEach(([category, riskData]) => {
+            console.log(`Processing category: ${category}`, riskData);
+            
+            if (riskData && riskData.files && Array.isArray(riskData.files)) {
+              riskData.files.forEach(finding => {
+                if (finding.file) {
+                  console.log(`Processing file: ${finding.file.name}`, {
+                    riskLevel: finding.file.riskLevel,
+                    riskLevelLabel: finding.file.riskLevelLabel,
+                    confidence: finding.confidence
+                  });
+                  
+                  // Use the new weighted risk scoring data from backend
+                  sensitiveFiles.push({
+                    ...finding.file,
+                    sensitivityReason: finding.file.sensitivityReason || category,
+                    riskLevel: finding.file.riskLevel || finding.confidence || 0.8,
+                    riskLevelLabel: finding.file.riskLevelLabel || 'medium',
+                    sensitiveCategories: finding.file.allSensitiveCategories || [category],
+                    sensitivityExplanation: finding.file.sensitivityExplanation || finding.explanation || `Found ${finding.categories?.join(', ') || category}`,
+                    ageGroup: ageGroup
+                  });
+                }
+              });
+            }
+          });
+        }
+      });
+      
+      // Deduplicate files by ID to avoid counting the same file multiple times
+      const uniqueFiles = Array.from(new Map(sensitiveFiles.map(f => [f.id, f])).values());
+      console.log('Final unique files (legacy structure):', uniqueFiles.length);
+      return uniqueFiles;
     }
     
-    const sensitiveFiles = [];
-    const ageGroups = ['moreThanThreeYears', 'oneToThreeYears', 'lessThanOneYear'];
-    ageGroups.forEach(ageGroup => {
-      const ageData = stats.ageDistribution?.[ageGroup];
-      console.log(`Processing age group: ${ageGroup}`, ageData);
-      
-      if (ageData && ageData.risks) {
-        Object.entries(ageData.risks).forEach(([category, riskData]) => {
-          console.log(`Processing category: ${category}`, riskData);
-          
-          if (riskData && riskData.files && Array.isArray(riskData.files)) {
-            riskData.files.forEach(finding => {
-              if (finding.file) {
-                console.log(`Processing file: ${finding.file.name}`, {
-                  riskLevel: finding.file.riskLevel,
-                  riskLevelLabel: finding.file.riskLevelLabel,
-                  confidence: finding.confidence
-                });
-                
-                // Use the new weighted risk scoring data from backend
-                sensitiveFiles.push({
-                  ...finding.file,
-                  sensitivityReason: finding.file.sensitivityReason || category,
-                  riskLevel: finding.file.riskLevel || finding.confidence || 0.8,
-                  riskLevelLabel: finding.file.riskLevelLabel || 'medium',
-                  allSensitiveCategories: finding.file.allSensitiveCategories || [category],
-                  sensitivityExplanation: finding.file.sensitivityExplanation || finding.explanation || `Found ${finding.categories?.join(', ') || category}`,
-                  ageGroup: ageGroup
-                });
-              }
-            });
-          }
-        });
-      }
-    });
-    
-    // Deduplicate files by ID to avoid counting the same file multiple times
-    const uniqueFiles = Array.from(new Map(sensitiveFiles.map(f => [f.id, f])).values());
-    console.log('Final unique files:', uniqueFiles.length);
-    console.log('=== END DEBUG ===');
-    return uniqueFiles;
+    return [];
   }, [stats]);
 
   // --- Group files by sensitivity category ---
@@ -168,12 +188,17 @@ const SensitiveContent = () => {
     }).catch(() => {}); // Ignore errors
     const sensitivityBreakdown = allSensitiveFiles.reduce((acc, file) => {
       // Count the file in ALL categories it belongs to, not just the primary one
-      if (file.allSensitiveCategories && Array.isArray(file.allSensitiveCategories)) {
+      if (file.sensitiveCategories && Array.isArray(file.sensitiveCategories)) {
+        file.sensitiveCategories.forEach(category => {
+          acc[category] = (acc[category] || 0) + 1;
+        });
+      } else if (file.allSensitiveCategories && Array.isArray(file.allSensitiveCategories)) {
+        // Legacy support for old field name
         file.allSensitiveCategories.forEach(category => {
           acc[category] = (acc[category] || 0) + 1;
         });
       } else {
-        // Fallback to sensitivityReason if allSensitiveCategories is not available
+        // Fallback to sensitivityReason if categories array is not available
         const reason = file.sensitivityReason || 'Unknown';
         acc[reason] = (acc[reason] || 0) + 1;
       }
@@ -306,6 +331,8 @@ const SensitiveContent = () => {
     console.log(`Action ${action} triggered for files:`, Array.from(selectedFiles));
   };
 
+  // No department assignment functions needed
+  
   const handleBack = () => {
     navigate(returnTo, {
       state: {
@@ -649,11 +676,10 @@ const SensitiveContent = () => {
                         <tr>
                           <th><input type="checkbox" checked={isGroupAllSelected(category)} onChange={() => handleSelectAllGroup(category)} /></th>
                           <th>File Name</th>
-                          <th>Age Group</th>
+                          <th>File Age</th>
                           <th>Last Modified</th>
                           <th>Sensitivity Reason</th>
                           <th>Risk Level</th>
-                          <th>Details</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -661,7 +687,12 @@ const SensitiveContent = () => {
                           <tr key={file.id} className={selectedFiles.has(file.id) ? 'selected' : ''}>
                             <td><input type="checkbox" checked={selectedFiles.has(file.id)} onChange={() => handleSelectFile(file.id)} /></td>
                             <td>{file.name}</td>
-                            <td>{file.ageGroup}</td>
+                            <td>
+                              {file.ageGroup === 'moreThanThreeYears' && '>3 years'}
+                              {file.ageGroup === 'oneToThreeYears' && '1-3 years'}
+                              {file.ageGroup === 'lessThanOneYear' && '<1 year'}
+                              {!['moreThanThreeYears', 'oneToThreeYears', 'lessThanOneYear'].includes(file.ageGroup) && file.ageGroup}
+                            </td>
                             <td>{new Date(file.modifiedTime).toLocaleDateString()}</td>
                             <td><span className={`sensitivity-badge blue-badge ${file.sensitivityReason}`}>{file.sensitivityReason?.toUpperCase()}</span></td>
                             <td>
@@ -672,7 +703,6 @@ const SensitiveContent = () => {
                                 <span className="risk-score">({Math.round(file.riskLevel * 100)}%)</span>
                               )}
                             </td>
-                            <td>{file.sensitivityExplanation}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -702,6 +732,8 @@ const SensitiveContent = () => {
           Next
         </button>
       </div>
+      
+      {/* No department assignment modal needed */}
     </div>
   );
 };

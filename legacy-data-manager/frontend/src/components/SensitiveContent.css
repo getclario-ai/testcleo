@@ -390,6 +390,15 @@ tr.selected:hover {
   color: white;
 }
 
+/* Truncated details styling */
+.truncated-details {
+  max-width: 250px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
+}
+
 /* Risk score display */
 .risk-score {
   font-size: 0.7rem;

@@ -137,7 +137,7 @@ def calculate_weighted_risk_score(file_data, findings):
     
     # Step 3: Add access-based risk factor
     # Files not accessed recently are riskier (potentially forgotten)
-    access_factor = get_access_risk_factor(file_data.get('lastAccessedTime'))
+    access_factor = get_access_risk_factor(file_data.get('lastAccessedTime')) # this is not available in the file metadata for g-drive file apis
     base_score += access_factor
     
     # Step 4: Cap the final score at 1.0 (100% risk)
@@ -349,12 +349,24 @@ def classify_by_age(modified_time):
 def initialize_structure():
     """Initialize the structure for file categorization."""
     return {
-        "total_documents": 0,
-        "total_sensitive": 0,
-        "total_duplicates": 0,
-        "file_types": {k: [] for k in file_type_map.keys() | {"others"}},
-        "sensitive_info": {k: [] for k in sensitive_keywords.keys()},
-        "duplicate_files": []
+        "files": [],
+        "stats": {
+            "total_documents": 0,
+            "total_sensitive": 0,
+            "total_duplicates": 0,
+            "by_file_type": {k: 0 for k in file_type_map.keys() | {"others"}},
+            "by_sensitivity": {k: 0 for k in sensitive_keywords.keys()},
+            "by_age_group": {
+                "moreThanThreeYears": 0,
+                "oneToThreeYears": 0,
+                "lessThanOneYear": 0
+            },
+            "by_risk_level": {
+                "high": 0,
+                "medium": 0,
+                "low": 0
+            }
+        }
     }
 
 def scan_text(text):
@@ -406,15 +418,29 @@ def extract_text_from_file(stream, file_type):
     return ""
 
 async def scan_files(source='local', path_or_drive_id='.', output_json='scan_report.json'):
+    # Initialize a simplified, flattened data structure
     results = {
-        "moreThanThreeYears": initialize_structure(),
-        "oneToThreeYears": initialize_structure(),
-        "lessThanOneYear": initialize_structure(),
+        "files": [],
+        "stats": {
+            "total_documents": 0,
+            "total_sensitive": 0,
+            "total_duplicates": 0,
+            "by_file_type": {k: 0 for k in file_type_map.keys() | {"others"}},
+            "by_sensitivity": {k: 0 for k in sensitive_keywords.keys()},
+            "by_age_group": {
+                "moreThanThreeYears": 0,
+                "oneToThreeYears": 0,
+                "lessThanOneYear": 0
+            },
+            "by_risk_level": {
+                "high": 0,
+                "medium": 0,
+                "low": 0
+            }
+        },
         "scan_complete": False,
         "processed_files": 0,
         "total_files": 0,
-        "total_duplicates": 0,
-        "total_sensitive_files": 0,
         "failed_files": [],
         "content_hashes": {}
     }
@@ -495,15 +521,28 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                     # Update type counts
                     type_counts[file_type] += 1
                     
-                    # Add file to appropriate category
+                    # Create a standardized file object
                     file_dict = {
                         "id": file_id,
                         "name": name,
                         "mimeType": mime_type,
                         "modifiedTime": file['modifiedTime'],
-                        "size": int(file.get('size', 0))
+                        "createdTime": file.get('createdTime', file['modifiedTime']),
+                        "size": int(file.get('size', 0)),
+                        "fileType": file_type,
+                        "ageGroup": age_group,
+                        "sensitiveCategories": [],
+                        "riskLevel": None,
+                        "riskLevelLabel": None,
+                        "department": None  # Will be populated later
                     }
-                    results[age_group]["file_types"][file_type].append(file_dict)
+                    
+                    # Add to the flat files array
+                    results["files"].append(file_dict)
+                    
+                    # Update statistics
+                    results["stats"]["by_file_type"][file_type] += 1
+                    results["stats"]["by_age_group"][age_group] += 1
 
                     # Only scan content for text-based files
                     if file_type in ['documents', 'spreadsheets', 'presentations', 'pdfs']:
@@ -512,24 +551,32 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                             if content:
                                 findings = scan_text(content)
                                 if findings:  # If any sensitive content was found
-                                    if file_id not in sensitive_file_ids: 
-                                        results[age_group]["total_sensitive"] += 1
-                                        sensitive_file_ids.add(file_id)
-                                        results["total_sensitive_files"] += 1
-                                    for k, v in findings.items():
-                                        if v:  # Only add if there are findings
-                                            results[age_group]["sensitive_info"][k].append({
-                                                "file": {
-                                                    "id": file_id,
-                                                    "name": name,
-                                                    "mimeType": mime_type,
-                                                    "modifiedTime": file['modifiedTime'],
-                                                    "size": int(file.get('size', 0))
-                                                },
-                                                "confidence": 0.8,
-                                                "explanation": f"Found {', '.join(v)}",
-                                                "categories": v
-                                            })
+                                    # Find the file in our results array
+                                    file_index = next((i for i, f in enumerate(results["files"]) if f["id"] == file_id), None)
+                                    if file_index is not None:
+                                        # Update the file with sensitivity information
+                                        file_obj = results["files"][file_index]
+                                        
+                                        # Track all sensitive categories found
+                                        all_categories = []
+                                        explanations = []
+                                        
+                                        for category, found_items in findings.items():
+                                            if found_items:  # Only add if there are findings
+                                                all_categories.append(category)
+                                                explanations.append(f"Found {', '.join(found_items)} in {category} category")
+                                                # Update stats
+                                                results['stats']['by_sensitivity'][category] += 1
+                                        
+                                        # Update the file object with sensitivity data
+                                        file_obj["sensitiveCategories"] = all_categories
+                                        file_obj["sensitivityExplanation"] = "; ".join(explanations)
+                                        file_obj["confidence"] = 0.8
+                                        
+                                        # Mark as sensitive in stats if not already counted
+                                        if file_id not in sensitive_file_ids:
+                                            results["stats"]["total_sensitive"] += 1
+                                            sensitive_file_ids.add(file_id)
                         except Exception as e:
                             logger.error(f"Error processing file content {name}: {str(e)}")
                     
@@ -542,125 +589,122 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
             logger.info(f"Found {len(sensitive_file_ids)} sensitive files")
             results["scan_complete"] = True
             
-            # --- ENRICH FILES WITH SENSITIVITY INFO AND CALCULATE WEIGHTED RISK SCORES ---
-            # Build a comprehensive mapping from file_id to all sensitive categories and calculated risk score
-            file_sensitivity = {}
+            # --- CALCULATE WEIGHTED RISK SCORES FOR SENSITIVE FILES ---
+            # Now calculate risk scores for all files with sensitive content
+            for file_obj in results["files"]:
+                if file_obj["sensitiveCategories"]:
+                    # Get file creation time and last accessed time for risk calculation
+                    file_data = {
+                        "createdTime": datetime.fromisoformat(file_obj["createdTime"].rstrip("Z")) if "createdTime" in file_obj else None,
+                        "lastAccessedTime": None,  # We don't have this data from Google Drive API
+                        "name": file_obj["name"]
+                    }
+                    
+                    # Convert sensitiveCategories to the format expected by calculate_weighted_risk_score
+                    findings_format = {category: [category] for category in file_obj["sensitiveCategories"]}
+                    
+                    # Calculate risk score using our weighted scoring system
+                    risk_score = calculate_weighted_risk_score(file_data, findings_format)
+                    risk_level_label = get_risk_level_label(risk_score)
+                    
+                    # Update the file object with risk data
+                    file_obj["riskLevel"] = risk_score
+                    file_obj["riskLevelLabel"] = risk_level_label
+                    
+                    # Update risk level stats
+                    results["stats"]["by_risk_level"][risk_level_label] += 1
+                    
+                    # Log the risk assessment for debugging
+                    logger.debug(f"File {file_obj.get('name', 'unknown')} risk assessment: "
+                               f"score={risk_score:.2f}, level={risk_level_label}, "
+                               f"categories={file_obj['sensitiveCategories']}")
             
-            # First pass: Collect all sensitive categories for each file
-            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
-                for category, findings in results[age_group]["sensitive_info"].items():
-                    for finding in findings:
-                        file_info = finding.get("file")
-                        if file_info and "id" in file_info:
-                            file_id = file_info["id"]
-                            
-                            # Initialize file sensitivity data if not exists
-                            if file_id not in file_sensitivity:
-                                file_sensitivity[file_id] = {
-                                    "categories": set(),
-                                    "file_data": file_info,
-                                    "explanations": []
-                                }
-                            
-                            # Add this category to the file's sensitive categories
-                            file_sensitivity[file_id]["categories"].add(category)
-                            file_sensitivity[file_id]["explanations"].append(finding.get("explanation", ""))
-            
-            # Second pass: Calculate weighted risk scores for each file
-            for file_id, sensitivity_data in file_sensitivity.items():
-                # Convert set to list for JSON serialization
-                categories_list = list(sensitivity_data["categories"])
-                
-                # Calculate weighted risk score using the new scoring system
-                risk_score = calculate_weighted_risk_score(
-                    sensitivity_data["file_data"], 
-                    {cat: [cat] for cat in categories_list}  # Convert to findings format
-                )
-                
-                # Determine primary sensitivity reason (highest weighted category)
-                primary_category = max(categories_list, key=lambda cat: CONTENT_RISK_WEIGHTS.get(cat, 0))
-                
-                # Update the sensitivity data with calculated risk score
-                file_sensitivity[file_id] = {
-                    "sensitivityReason": primary_category,
-                    "riskLevel": risk_score,
-                    "riskLevelLabel": get_risk_level_label(risk_score),
-                    "allCategories": categories_list,
-                    "explanation": "; ".join(sensitivity_data["explanations"])
-                }
-            # --- ENRICH FILES WITH CALCULATED RISK SCORES ---
-            # Apply the calculated weighted risk scores to all files in the results
-            
-            # 1. Apply risk data to files in file_types section
-            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
-                for file_type, files in results[age_group]["file_types"].items():
-                    for file in files:
-                        if isinstance(file, dict) and "id" in file:
-                            sens = file_sensitivity.get(file["id"])
-                            if sens:
-                                # Apply the new weighted risk scoring data
-                                file["sensitivityReason"] = sens["sensitivityReason"]
-                                file["riskLevel"] = sens["riskLevel"]
-                                file["riskLevelLabel"] = sens["riskLevelLabel"]
-                                file["allSensitiveCategories"] = sens["allCategories"]
-                                file["sensitivityExplanation"] = sens["explanation"]
-                                
-                                # Log the risk assessment for debugging
-                                logger.debug(f"File {file.get('name', 'unknown')} risk assessment: "
-                                           f"score={sens['riskLevel']:.2f}, level={sens['riskLevelLabel']}, "
-                                           f"categories={sens['allCategories']}")
-                            else:
-                                # Non-sensitive files get default values
-                                file["sensitivityReason"] = None
-                                file["riskLevel"] = None
-                                file["riskLevelLabel"] = None
-                                file["allSensitiveCategories"] = []
-                                file["sensitivityExplanation"] = None
-            
-            # 2. Apply risk data to files in sensitive_info section (CRITICAL FIX)
-            # This ensures that the file objects in findings also have the risk data
-            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
-                for category, findings in results[age_group]["sensitive_info"].items():
-                    for finding in findings:
-                        file_info = finding.get("file")
-                        if file_info and isinstance(file_info, dict) and "id" in file_info:
-                            sens = file_sensitivity.get(file_info["id"])
-                            if sens:
-                                # Apply the new weighted risk scoring data to the file object in the finding
-                                file_info["sensitivityReason"] = sens["sensitivityReason"]
-                                file_info["riskLevel"] = sens["riskLevel"]
-                                file_info["riskLevelLabel"] = sens["riskLevelLabel"]
-                                file_info["allSensitiveCategories"] = sens["allCategories"]
-                                file_info["sensitivityExplanation"] = sens["explanation"]
-                                
-                                logger.debug(f"Sensitive info file {file_info.get('name', 'unknown')} risk assessment: "
-                                           f"score={sens['riskLevel']:.2f}, level={sens['riskLevelLabel']}, "
-                                           f"categories={sens['allCategories']}")
-            # --- CALCULATE SUMMARY STATISTICS ---
-            # Count unique sensitive files per age group for summary statistics
-            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
-                unique_sensitive_ids = set()
-                for category, findings in results[age_group]["sensitive_info"].items():
-                    for finding in findings:
-                        file_info = finding.get("file")
-                        if file_info and "id" in file_info:
-                            unique_sensitive_ids.add(file_info["id"])
-                            # Debug log file with new risk scoring information
-                            sens_data = file_sensitivity.get(file_info["id"], {})
-                            logger.info(f"[DEBUG] Sensitive file - Age group: {age_group}, Category: {category}, "
-                                       f"Name: {file_info.get('name')}, Size: {file_info.get('size')}, "
-                                       f"Risk Score: {sens_data.get('riskLevel', 'N/A'):.2f}, "
-                                       f"Risk Level: {sens_data.get('riskLevelLabel', 'N/A')}")
-                results[age_group]["total_sensitive"] = len(unique_sensitive_ids)
+            # --- UPDATE OVERALL STATISTICS ---
+            # Now that we've processed all files, update the overall statistics
+            results["stats"]["total_documents"] = len(results["files"])
+            results["total_files"] = len(results["files"])
+            results["processed_files"] = len(results["files"])
+            results["stats"]["total_sensitive"] = len(sensitive_file_ids)
             
             # Log summary of risk distribution for the entire scan
-            total_files = len(file_sensitivity)
-            high_risk_files = sum(1 for data in file_sensitivity.values() if data.get('riskLevelLabel') == 'high')
-            medium_risk_files = sum(1 for data in file_sensitivity.values() if data.get('riskLevelLabel') == 'medium')
-            low_risk_files = sum(1 for data in file_sensitivity.values() if data.get('riskLevelLabel') == 'low')
+            high_risk_files = sum(1 for file in results["files"] if file.get("riskLevelLabel") == "high")
+            medium_risk_files = sum(1 for file in results["files"] if file.get("riskLevelLabel") == "medium")
+            low_risk_files = sum(1 for file in results["files"] if file.get("riskLevelLabel") == "low")
             
             logger.info(f"Risk distribution summary: High={high_risk_files}, Medium={medium_risk_files}, Low={low_risk_files}")
-            logger.info(f"Total sensitive files processed: {total_files}")
+            logger.info(f"Total sensitive files processed: {len(sensitive_file_ids)}")
+            
+            # Add primary sensitivity reason to each file (highest weighted category)
+            for file_obj in results["files"]:
+                if file_obj["sensitiveCategories"]:
+                    # Determine primary sensitivity reason (highest weighted category)
+                    primary_category = max(file_obj["sensitiveCategories"], 
+                                          key=lambda cat: CONTENT_RISK_WEIGHTS.get(cat, 0), 
+                                          default=None)
+                    file_obj["sensitivityReason"] = primary_category
+            # --- ADD BACKWARD COMPATIBILITY LAYER ---
+            # For backward compatibility, we'll add the old structure format
+            # This can be removed once all consumers are updated to use the new format
+            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
+                results[age_group] = {
+                    "total_documents": sum(1 for file in results["files"] if file["ageGroup"] == age_group),
+                    "total_sensitive": sum(1 for file in results["files"] if file["ageGroup"] == age_group and file["sensitiveCategories"]),
+                    "file_types": {},
+                    "sensitive_info": {}
+                }
+                
+                # Initialize file_types with empty lists
+                for file_type in file_type_map.keys() | {"others"}:
+                    results[age_group]["file_types"][file_type] = []
+                
+                # Initialize sensitive_info with empty lists
+                for category in sensitive_keywords.keys():
+                    results[age_group]["sensitive_info"][category] = []
+                
+                # Populate file_types
+                for file in results["files"]:
+                    if file["ageGroup"] == age_group:
+                        file_type = file["fileType"]
+                        # Create a copy without the new fields for backward compatibility
+                        compat_file = {
+                            "id": file["id"],
+                            "name": file["name"],
+                            "mimeType": file["mimeType"],
+                            "modifiedTime": file["modifiedTime"],
+                            "size": file["size"]
+                        }
+                        # Add backward compatibility fields if they exist
+                        if "riskLevel" in file and file["riskLevel"] is not None:
+                            compat_file["riskLevel"] = file["riskLevel"]
+                            compat_file["riskLevelLabel"] = file["riskLevelLabel"]
+                            compat_file["sensitivityReason"] = file["sensitivityReason"]
+                            compat_file["allSensitiveCategories"] = file["sensitiveCategories"]
+                            compat_file["sensitivityExplanation"] = file.get("sensitivityExplanation", "")
+                        
+                        results[age_group]["file_types"][file_type].append(compat_file)
+                
+                # Populate sensitive_info
+                for file in results["files"]:
+                    if file["ageGroup"] == age_group and file["sensitiveCategories"]:
+                        for category in file["sensitiveCategories"]:
+                            finding = {
+                                "file": {
+                                    "id": file["id"],
+                                    "name": file["name"],
+                                    "mimeType": file["mimeType"],
+                                    "modifiedTime": file["modifiedTime"],
+                                    "size": file["size"],
+                                    "riskLevel": file["riskLevel"],
+                                    "riskLevelLabel": file["riskLevelLabel"],
+                                    "sensitivityReason": file["sensitivityReason"],
+                                    "allSensitiveCategories": file["sensitiveCategories"],
+                                    "sensitivityExplanation": file.get("sensitivityExplanation", "")
+                                },
+                                "confidence": file.get("confidence", 0.8),
+                                "explanation": file.get("sensitivityExplanation", f"Found {category}"),
+                                "categories": file["sensitiveCategories"]
+                            }
+                            results[age_group]["sensitive_info"][category].append(finding)
        
         except Exception as e:
             logger.error(f"Error scanning files: {str(e)}")
