@@ -275,24 +275,24 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
       localStorage.removeItem('fid_stats');
       localStorage.removeItem('rcid_stats');
       
-      // Calculate total sensitive documents across all age groups
-      const totalSensitiveDocuments = [
-        data.moreThanThreeYears?.total_sensitive || 0,
-        data.oneToThreeYears?.total_sensitive || 0,
-        data.lessThanOneYear?.total_sensitive || 0
-      ].reduce((sum, count) => sum + count, 0);
-      
-      // Transform data to match expected structure
+      // Transform data to match expected structure for the frontend
       const transformedData = {
         directory: directory,
-        docCount: data.processed_files || 0,
-        duplicateDocuments: data.total_duplicates || 0,
-        sensitiveDocuments: data.total_sensitive_files || 0,
-        ageDistribution: {
-          moreThanThreeYears: transformAgeGroup(data.moreThanThreeYears),
-          oneToThreeYears: transformAgeGroup(data.oneToThreeYears),
-          lessThanOneYear: transformAgeGroup(data.lessThanOneYear)
-        }
+        docCount: data.stats?.total_documents || data.processed_files || 0,
+        duplicateDocuments: data.stats?.total_duplicates || data.total_duplicates || 0,
+        sensitiveDocuments: data.stats?.total_sensitive || 0,
+        // Group files by age for backward compatibility
+        ageDistribution: transformFilesToAgeGroups(data.files || []),
+        // Add department distribution
+        departmentDistribution: data.stats?.by_department || {},
+        // Add risk level distribution
+        riskDistribution: data.stats?.by_risk_level || {
+          high: 0,
+          medium: 0,
+          low: 0
+        },
+        // Store the raw files array for direct access
+        files: data.files || []
       };
       
       // DEBUG: Log the transformation process
@@ -329,7 +329,117 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
     }
   };
 
-  // Helper function to transform an age group's data
+  // New function to transform flat files array into age-grouped structure
+  const transformFilesToAgeGroups = (files) => {
+    // Group files by age
+    const filesByAge = {
+      moreThanThreeYears: [],
+      oneToThreeYears: [],
+      lessThanOneYear: []
+    };
+    
+    // Group files by age
+    files.forEach(file => {
+      const ageGroup = file.ageGroup || 'moreThanThreeYears';
+      filesByAge[ageGroup].push(file);
+    });
+    
+    // Transform each age group
+    return {
+      moreThanThreeYears: transformFilesForAgeGroup(filesByAge.moreThanThreeYears),
+      oneToThreeYears: transformFilesForAgeGroup(filesByAge.oneToThreeYears),
+      lessThanOneYear: transformFilesForAgeGroup(filesByAge.lessThanOneYear)
+    };
+  };
+  
+  // Transform files for a specific age group
+  const transformFilesForAgeGroup = (files) => {
+    if (!files || files.length === 0) {
+      return {
+        types: {},
+        risks: {},
+        totalSensitive: 0,
+        total_documents: 0
+      };
+    }
+    
+    // Group files by type
+    const filesByType = {};
+    files.forEach(file => {
+      const fileType = file.fileType || 'others';
+      if (!filesByType[fileType]) {
+        filesByType[fileType] = [];
+      }
+      filesByType[fileType].push(file);
+    });
+    
+    // Transform file types
+    const types = {};
+    const totalFiles = files.length;
+    
+    Object.entries(filesByType).forEach(([type, typeFiles]) => {
+      types[type] = {
+        count: typeFiles.length,
+        size: typeFiles.reduce((sum, file) => sum + (parseInt(file.size) || 0), 0),
+        percentage: totalFiles > 0 ? Math.round((typeFiles.length / totalFiles) * 100) : 0,
+        files: typeFiles
+      };
+    });
+    
+    // Group files by sensitivity category
+    const filesBySensitivity = {};
+    files.forEach(file => {
+      if (file.sensitiveCategories && file.sensitiveCategories.length > 0) {
+        file.sensitiveCategories.forEach(category => {
+          if (!filesBySensitivity[category]) {
+            filesBySensitivity[category] = [];
+          }
+          filesBySensitivity[category].push({
+            file: file,
+            confidence: file.confidence || 0.8,
+            explanation: file.sensitivityExplanation || `Found ${category}`,
+            categories: file.sensitiveCategories
+          });
+        });
+      }
+    });
+    
+    // Transform risks with proper deduplication
+    const risks = {};
+    const sensitiveFiles = files.filter(file => file.sensitiveCategories && file.sensitiveCategories.length > 0);
+    const totalSensitiveFiles = sensitiveFiles.length;
+    
+    Object.entries(filesBySensitivity).forEach(([category, findings]) => {
+      // Count unique files in this category
+      const uniqueFileIds = new Set();
+      findings.forEach(finding => {
+        if (finding.file && finding.file.id) {
+          uniqueFileIds.add(finding.file.id);
+        }
+      });
+      
+      const uniqueCount = uniqueFileIds.size;
+      const percentage = totalSensitiveFiles > 0 ? Math.round((uniqueCount / totalSensitiveFiles) * 100) : 0;
+      
+      risks[category] = {
+        count: uniqueCount,
+        files: findings,
+        confidence: findings.length > 0 
+          ? findings.reduce((sum, finding) => sum + (finding.confidence || 0.8), 0) / findings.length 
+          : 0,
+        percentage: percentage
+      };
+    });
+    
+    return {
+      types,
+      risks,
+      totalSensitive: sensitiveFiles.length,
+      total_documents: files.length
+    };
+  };
+  
+  // Legacy function for backward compatibility
   const transformAgeGroup = (groupData) => {
     if (!groupData) {
       return {
@@ -360,11 +470,9 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
     }
 
     // Transform risks with proper deduplication
-    // This fixes the discrepancy between home screen and sensitive content overview counts
-    // Previously used raw findings.length which counted duplicate files multiple times
     const risks = {};
     if (groupData.sensitive_info) {
-      // First, collect all unique files per category (same logic as App.js)
+      // First, collect all unique files per category
       const categoryFiles = {};
       Object.entries(groupData.sensitive_info).forEach(([category, findings]) => {
         if (Array.isArray(findings)) {
@@ -396,17 +504,6 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
         if (Array.isArray(findings)) {
           const uniqueCount = categoryFiles[category] || 0;
           const percentage = totalFiles > 0 ? Math.round((uniqueCount / totalFiles) * 100) : 0;
-          
-          // DEBUG: Log risk data transformation
-          console.log(`=== DEBUG: transformAgeGroup processing ${category} ===`);
-          console.log(`Category: ${category}, Findings count: ${findings.length}, Unique count: ${uniqueCount}`);
-          if (findings.length > 0) {
-            console.log('First finding file data:', findings[0].file);
-            console.log('Risk level data:', {
-              riskLevel: findings[0].file?.riskLevel,
-              riskLevelLabel: findings[0].file?.riskLevelLabel
-            });
-          }
           
           risks[category] = {
             count: uniqueCount,
