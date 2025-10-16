@@ -30,9 +30,9 @@ const SensitiveContent = () => {
   // No department assignment state variables needed
   const filesPerPage = 20;
 
-  // --- Extract all sensitive files from the full stats using the new flattened structure ---
+  // --- Extract all sensitive files from the stats ---
   const allSensitiveFiles = React.useMemo(() => {
-    if (!stats) return [];
+    if (!stats || !stats.files) return [];
     
     // Send debug info to backend to see in terminal
     fetch('http://localhost:8000/api/v1/debug/log', {
@@ -45,67 +45,15 @@ const SensitiveContent = () => {
       })
     }).catch(() => {}); // Ignore errors
     
-    // Check if we're using the new flattened structure
-    if (stats.files && Array.isArray(stats.files)) {
-      console.log('Using new flattened file structure with', stats.files.length, 'files');
-      
-      // Filter only sensitive files (files with sensitiveCategories)
-      const sensitiveFiles = stats.files.filter(file => 
-        file.sensitiveCategories && 
-        Array.isArray(file.sensitiveCategories) && 
-        file.sensitiveCategories.length > 0
-      );
-      
-      console.log('Found', sensitiveFiles.length, 'sensitive files');
-      return sensitiveFiles;
-    } 
-    // Fallback to old structure for backward compatibility
-    else if (stats.ageDistribution) {
-      console.log('Using legacy structure with age distribution');
-      const sensitiveFiles = [];
-      const ageGroups = ['moreThanThreeYears', 'oneToThreeYears', 'lessThanOneYear'];
-      
-      ageGroups.forEach(ageGroup => {
-        const ageData = stats.ageDistribution?.[ageGroup];
-        console.log(`Processing age group: ${ageGroup}`, ageData);
-        
-        if (ageData && ageData.risks) {
-          Object.entries(ageData.risks).forEach(([category, riskData]) => {
-            console.log(`Processing category: ${category}`, riskData);
-            
-            if (riskData && riskData.files && Array.isArray(riskData.files)) {
-              riskData.files.forEach(finding => {
-                if (finding.file) {
-                  console.log(`Processing file: ${finding.file.name}`, {
-                    riskLevel: finding.file.riskLevel,
-                    riskLevelLabel: finding.file.riskLevelLabel,
-                    confidence: finding.confidence
-                  });
-                  
-                  // Use the new weighted risk scoring data from backend
-                  sensitiveFiles.push({
-                    ...finding.file,
-                    sensitivityReason: finding.file.sensitivityReason || category,
-                    riskLevel: finding.file.riskLevel || finding.confidence || 0.8,
-                    riskLevelLabel: finding.file.riskLevelLabel || 'medium',
-                    sensitiveCategories: finding.file.allSensitiveCategories || [category],
-                    sensitivityExplanation: finding.file.sensitivityExplanation || finding.explanation || `Found ${finding.categories?.join(', ') || category}`,
-                    ageGroup: ageGroup
-                  });
-                }
-              });
-            }
-          });
-        }
-      });
-      
-      // Deduplicate files by ID to avoid counting the same file multiple times
-      const uniqueFiles = Array.from(new Map(sensitiveFiles.map(f => [f.id, f])).values());
-      console.log('Final unique files (legacy structure):', uniqueFiles.length);
-      return uniqueFiles;
-    }
+    // Filter only sensitive files (files with sensitiveCategories)
+    const sensitiveFiles = stats.files.filter(file => 
+      file.sensitiveCategories && 
+      Array.isArray(file.sensitiveCategories) && 
+      file.sensitiveCategories.length > 0
+    );
     
-    return [];
+    console.log('Found', sensitiveFiles.length, 'sensitive files');
+    return sensitiveFiles;
   }, [stats]);
 
   // --- Group files by sensitivity category ---
@@ -199,8 +147,8 @@ const SensitiveContent = () => {
         });
       } else {
         // Fallback to sensitivityReason if categories array is not available
-        const reason = file.sensitivityReason || 'Unknown';
-        acc[reason] = (acc[reason] || 0) + 1;
+      const reason = file.sensitivityReason || 'Unknown';
+      acc[reason] = (acc[reason] || 0) + 1;
       }
       return acc;
     }, {});
@@ -247,51 +195,20 @@ const SensitiveContent = () => {
       setLoading(true);
       setError(null);
 
-      if (!stats) {
+      if (!stats || !stats.files) {
         setError('No analysis data found. Please run analysis first.');
         return;
       }
 
-      // Extract sensitive files from the stats data
-      const sensitiveFiles = [];
-      
-      // Go through all age groups and extract sensitive files
-      const ageGroups = ['moreThanThreeYears', 'oneToThreeYears', 'lessThanOneYear'];
-      
-      ageGroups.forEach(ageGroup => {
-        const ageData = stats.ageDistribution?.[ageGroup];
-        if (ageData && ageData.risks) {
-          // Go through each sensitivity category (pii, financial, legal, confidential)
-          Object.entries(ageData.risks).forEach(([category, riskData]) => {
-            if (riskData && riskData.files && Array.isArray(riskData.files)) {
-              riskData.files.forEach(finding => {
-                if (finding.file) {
-                  // Use the new weighted risk scoring data from backend
-                  sensitiveFiles.push({
-                    ...finding.file,
-                    sensitivityReason: finding.file.sensitivityReason || category,
-                    riskLevel: finding.file.riskLevel || finding.confidence || 0.8,
-                    riskLevelLabel: finding.file.riskLevelLabel || 'medium',
-                    allSensitiveCategories: finding.file.allSensitiveCategories || [category],
-                    sensitivityExplanation: finding.file.sensitivityExplanation || finding.explanation || `Found ${finding.categories?.join(', ') || category}`,
-                    ageGroup: ageGroup
-                  });
-                }
-              });
-            }
-          });
-        }
-      });
-
-      // Apply pagination
+      // Apply pagination directly to allSensitiveFiles
       const startIndex = (currentPage - 1) * filesPerPage;
       const endIndex = startIndex + filesPerPage;
-      const paginatedFiles = sensitiveFiles.slice(startIndex, endIndex);
+      const paginatedFiles = allSensitiveFiles.slice(startIndex, endIndex);
 
       setFiles(paginatedFiles);
-      setTotalPages(Math.ceil(sensitiveFiles.length / filesPerPage));
+      setTotalPages(Math.ceil(allSensitiveFiles.length / filesPerPage));
       
-      if (sensitiveFiles.length === 0) {
+      if (allSensitiveFiles.length === 0) {
         setError('No sensitive files found. Please run analysis first.');
       }
     } catch (err) {
@@ -300,7 +217,7 @@ const SensitiveContent = () => {
     } finally {
       setLoading(false);
     }
-  }, [stats, currentPage, filesPerPage]);
+  }, [stats, currentPage, filesPerPage, allSensitiveFiles]);
 
   useEffect(() => {
     fetchSensitiveFiles();
@@ -332,7 +249,7 @@ const SensitiveContent = () => {
   };
 
   // No department assignment functions needed
-  
+
   const handleBack = () => {
     navigate(returnTo, {
       state: {
@@ -368,13 +285,41 @@ const SensitiveContent = () => {
         #60a5fa ${high + medium}% 100%
       )`
     };
-    // Sensitivity pie
+    // Sensitivity pie with weighted distribution
+    // Define category weights (same as in backend)
+    const categoryWeights = {
+      'confidential': 0.4, // Highest risk
+      'pii': 0.3,          // High risk
+      'financial': 0.2,    // Medium-high risk
+      'legal': 0.1         // Medium risk
+    };
+    
+    // Calculate total weight for normalization
     const sensitivityCategories = Object.entries(executiveMetrics.sensitivityBreakdown);
+    const totalWeight = sensitivityCategories.reduce((sum, [category, count]) => {
+      return sum + (count * (categoryWeights[category] || 0.1));
+    }, 0);
+    
+    // Generate pie segments based on weighted importance
     let currentPercent = 0;
-    const sensitivitySegments = sensitivityCategories.map(([category, count], idx) => {
-      const colors = ['#1e40af', '#3b82f6', '#60a5fa', '#93c5fd', '#dbeafe', '#eff6ff'];
-      const percent = (count / executiveMetrics.totalFiles) * 100;
-      const segment = `${colors[idx % colors.length]} ${currentPercent}% ${currentPercent + percent}%`;
+    const sensitivitySegments = sensitivityCategories
+      // Sort by weight (highest first) to ensure consistent segment order
+      .sort(([catA], [catB]) => (categoryWeights[catB] || 0) - (categoryWeights[catA] || 0))
+      .map(([category, count]) => {
+        // Use the same colors as the landing dashboard
+        const categoryColors = {
+          'confidential': '#c0392b',
+          'pii': '#e74c3c',
+          'financial': '#f39c12',
+          'legal': '#8e44ad'
+        };
+        
+        // Calculate weighted percentage (category count * weight / total weight)
+        const weight = categoryWeights[category] || 0.1;
+        const weightedValue = count * weight;
+        const percent = totalWeight > 0 ? (weightedValue / totalWeight * 100) : 0;
+        
+        const segment = `${categoryColors[category] || '#757575'} ${currentPercent}% ${currentPercent + percent}%`;
       currentPercent += percent;
       return segment;
     });
@@ -440,34 +385,7 @@ const SensitiveContent = () => {
           </h2>
         </div>
         <div className="action-buttons">
-          <button
-            className="action-button archive"
-            disabled={!isAnySelected}
-            onClick={() => handleAction('archive')}
-          >
-            Archive
-          </button>
-          <button
-            className="action-button delete"
-            disabled={!isAnySelected}
-            onClick={() => handleAction('delete')}
-          >
-            Delete
-          </button>
-          <button
-            className="action-button review"
-            disabled={!isAnySelected}
-            onClick={() => handleAction('review')}
-          >
-            Schedule Review
-          </button>
-          <button
-            className="action-button remind"
-            disabled={!isAnySelected}
-            onClick={() => handleAction('remind')}
-          >
-            Remind Me
-          </button>
+          {/* Action buttons moved to table header */}
         </div>
       </div>
 
@@ -526,7 +444,7 @@ const SensitiveContent = () => {
           <div className="compliance-section">
             <h4>Compliance Status</h4>
             <div className="compliance-grid">
-              <div className={`compliance-item ${executiveMetrics.compliance.gdpr ? 'compliant' : 'non-compliant'}`}>
+              <div className={`compliance-item ${executiveMetrics.compliance.gdpr ? 'non-compliant' : 'compliant'}`}>
                 <div className="compliance-icon">🇪🇺</div>
                 <div className="compliance-label">GDPR</div>
                 <div className="compliance-status">
@@ -534,7 +452,7 @@ const SensitiveContent = () => {
                 </div>
               </div>
               
-              <div className={`compliance-item ${executiveMetrics.compliance.hipaa ? 'compliant' : 'non-compliant'}`}>
+              <div className={`compliance-item ${executiveMetrics.compliance.hipaa ? 'non-compliant' : 'compliant'}`}>
                 <div className="compliance-icon">🏥</div>
                 <div className="compliance-label">HIPAA</div>
                 <div className="compliance-status">
@@ -542,7 +460,7 @@ const SensitiveContent = () => {
                 </div>
               </div>
               
-              <div className={`compliance-item ${executiveMetrics.compliance.sox ? 'compliant' : 'non-compliant'}`}>
+              <div className={`compliance-item ${executiveMetrics.compliance.sox ? 'non-compliant' : 'compliant'}`}>
                 <div className="compliance-icon">📈</div>
                 <div className="compliance-label">SOX</div>
                 <div className="compliance-status">
@@ -550,7 +468,7 @@ const SensitiveContent = () => {
                 </div>
               </div>
               
-              <div className={`compliance-item ${executiveMetrics.compliance.pci ? 'compliant' : 'non-compliant'}`}>
+              <div className={`compliance-item ${executiveMetrics.compliance.pci ? 'non-compliant' : 'compliant'}`}>
                 <div className="compliance-icon">💳</div>
                 <div className="compliance-label">PCI-DSS</div>
                 <div className="compliance-status">
@@ -604,7 +522,7 @@ const SensitiveContent = () => {
               </div>
             </div>
             <div className="sensitivity-chart">
-              <h4>Sensitivity Categories</h4>
+              <h4>Risk Categories</h4>
               <div className="pie-chart-container">
                 <div className="pie-chart" style={sensitivityPieStyle}>
                   <div className="pie-center">
@@ -613,23 +531,61 @@ const SensitiveContent = () => {
                   </div>
                 </div>
                 <div className="pie-legend">
-                  {Object.entries(executiveMetrics.sensitivityBreakdown).map(([category, count], index) => {
-                    const colors = ['#1e40af', '#3b82f6', '#60a5fa', '#93c5fd', '#dbeafe', '#eff6ff'];
+                  {Object.entries(executiveMetrics.sensitivityBreakdown)
+                    .sort(([catA], [catB]) => {
+                      // Sort by weight (highest first) to match pie chart order
+                      const categoryWeights = {
+                        'confidential': 0.4,
+                        'pii': 0.3,
+                        'financial': 0.2,
+                        'legal': 0.1
+                      };
+                      return (categoryWeights[catB] || 0) - (categoryWeights[catA] || 0);
+                    })
+                    .map(([category, count]) => {
+                      // Match colors with the landing dashboard
+                      const categoryColors = {
+                        'confidential': '#c0392b',
+                        'pii': '#e74c3c',
+                        'financial': '#f39c12',
+                        'legal': '#8e44ad'
+                      };
                     const icons = {
                       'pii': '👤',
                       'financial': '💰',
                       'legal': '⚖️',
                       'confidential': '🔒'
                     };
+                      
+                      // Calculate weighted percentage for this category
+                      const categoryWeights = {
+                        'confidential': 0.4,
+                        'pii': 0.3,
+                        'financial': 0.2,
+                        'legal': 0.1
+                      };
+                      const weight = categoryWeights[category] || 0.1;
+                      
+                      // Calculate total weighted value for normalization
+                      const totalWeight = Object.entries(executiveMetrics.sensitivityBreakdown).reduce((sum, [cat, cnt]) => {
+                        return sum + (cnt * (categoryWeights[cat] || 0.1));
+                      }, 0);
+                      
+                      // Calculate weighted percentage
+                      const weightedValue = count * weight;
+                      const weightedPercent = totalWeight > 0 ? Math.round((weightedValue / totalWeight) * 100) : 0;
+                      
                     return (
                       <div key={category} className="legend-item">
-                        <div className="legend-color" style={{background: colors[index % colors.length]}}></div>
+                          <div className="legend-color" style={{background: categoryColors[category] || '#757575'}}></div>
                         <div className="legend-text">
                           <span className="legend-label">
                             {icons[category] || '📄'} {category.toUpperCase()}
                           </span>
-                          <span className="legend-value">{count} ({Math.round((count / executiveMetrics.totalFiles) * 100)}%)</span>
-                        </div>
+                            <span className="legend-value">
+                              {count} ({weightedPercent}% weighted)
+                            </span>
+                          </div>
                       </div>
                     );
                   })}
@@ -648,37 +604,101 @@ const SensitiveContent = () => {
           const isScrollable = groupFiles.length > 20;
           return (
             <div key={category} className="file-group-card">
-              <div className="file-group-header" onClick={() => toggleGroup(category)}>
-                <span className="category-icon">{iconForCategory(category)}</span>
-                <span className="file-group-title">{category.toUpperCase()}</span>
-                <span className="file-group-count">{groupFiles.length} files</span>
-                <span className="chevron-svg" aria-label="Expand/collapse">
-                  {collapsedGroups[category] ? (
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 8l3 3 3-3" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  ) : (
-                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7l3 3-3 3" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                  )}
-                </span>
+              <div className="file-group-header">
+                <div className="header-left" onClick={() => toggleGroup(category)}>
+                  <span className="category-icon">{iconForCategory(category)}</span>
+                  <span className="file-group-title">{category.toUpperCase()}</span>
+                  <span className="file-group-count">{groupFiles.length} files</span>
+                </div>
+                <div className="header-right">
+                  <div className="header-action-buttons">
+                    <button 
+                      className="header-action-btn archive-btn" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAction('archive');
+                      }}
+                      title="Archive"
+                      disabled={!isAnySelected}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="21 8 21 21 3 21 3 8"></polyline>
+                        <rect x="1" y="3" width="22" height="5"></rect>
+                        <line x1="10" y1="12" x2="14" y2="12"></line>
+                      </svg>
+                    </button>
+                    <button 
+                      className="header-action-btn delete-btn" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAction('delete');
+                      }}
+                      title="Delete"
+                      disabled={!isAnySelected}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                      </svg>
+                    </button>
+                    <button 
+                      className="header-action-btn review-btn" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAction('review');
+                      }}
+                      title="Schedule Review"
+                      disabled={!isAnySelected}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                      </svg>
+                    </button>
+                    <button 
+                      className="header-action-btn remind-btn" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleAction('remind');
+                      }}
+                      title="Remind Me"
+                      disabled={!isAnySelected}
+                    >
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+                      </svg>
+                    </button>
+                  </div>
+                  <span className="chevron-svg" aria-label="Expand/collapse" onClick={() => toggleGroup(category)}>
+                    {collapsedGroups[category] ? (
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M7 8l3 3 3-3" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    ) : (
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 7l3 3-3 3" stroke="#64748b" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    )}
+                  </span>
+                </div>
               </div>
               {!collapsedGroups[category] && (
                 <div className="file-group-content">
-                  {showActionBar && (
-                    <div className="file-group-action-bar">
-                      <button className="action-button archive" onClick={() => handleAction('archive')} disabled={!groupSelected}>Archive</button>
-                      <button className="action-button delete" onClick={() => handleAction('delete')} disabled={!groupSelected}>Delete</button>
-                      <button className="action-button review" onClick={() => handleAction('review')} disabled={!groupSelected}>Schedule Review</button>
-                      <button className="action-button remind" onClick={() => handleAction('remind')} disabled={!groupSelected}>Remind Me</button>
-                    </div>
-                  )}
+                  {/* Action buttons moved to header */}
                   <div className="file-group-table-wrapper" style={isScrollable ? {maxHeight: '400px', overflowY: 'auto'} : {}}>
                     <table className="file-group-table">
                       <thead>
                         <tr>
-                          <th><input type="checkbox" checked={isGroupAllSelected(category)} onChange={() => handleSelectAllGroup(category)} /></th>
+                          <th>
+                            <div className="table-header-actions">
+                              <input 
+                                type="checkbox" 
+                                checked={isGroupAllSelected(category)} 
+                                onChange={() => handleSelectAllGroup(category)} 
+                              />
+                            </div>
+                          </th>
                           <th>File Name</th>
                           <th>File Age</th>
                           <th>Last Modified</th>
-                          <th>Sensitivity Reason</th>
+                          <th>Risk Categories</th>
                           <th>Risk Level</th>
                         </tr>
                       </thead>
@@ -694,7 +714,51 @@ const SensitiveContent = () => {
                               {!['moreThanThreeYears', 'oneToThreeYears', 'lessThanOneYear'].includes(file.ageGroup) && file.ageGroup}
                             </td>
                             <td>{new Date(file.modifiedTime).toLocaleDateString()}</td>
-                            <td><span className={`sensitivity-badge blue-badge ${file.sensitivityReason}`}>{file.sensitivityReason?.toUpperCase()}</span></td>
+                            <td>
+                              {file.sensitivityExplanation ? 
+                                <div 
+                                  className="keywords-found"
+                                  title={file.sensitivityExplanation.split(';')
+                                    .map(explanation => {
+                                      const keywordsMatch = explanation.match(/Found (.*?) in/);
+                                      return keywordsMatch ? keywordsMatch[1] : explanation;
+                                    }).join(', ')}
+                                >
+                                  {file.sensitivityExplanation.split(';')
+                                    .map(explanation => {
+                                      // Extract category and keywords
+                                      const categoryMatch = explanation.match(/in (.*?) category/);
+                                      const keywordsMatch = explanation.match(/Found (.*?) in/);
+                                      
+                                      const category = categoryMatch ? categoryMatch[1] : '';
+                                      const keywords = keywordsMatch ? keywordsMatch[1] : explanation;
+                                      
+                                      // Assign weight based on category for sorting
+                                      let weight = 0;
+                                      if (category === 'confidential') weight = 4;
+                                      else if (category === 'pii') weight = 3;
+                                      else if (category === 'financial') weight = 2;
+                                      else if (category === 'legal') weight = 1;
+                                      
+                                      return { keywords, category, weight };
+                                    })
+                                    .sort((a, b) => b.weight - a.weight) // Sort by weight (highest first)
+                                    .slice(0, 5) // Take top 5 by impact
+                                    .map((item, i) => (
+                                      <span key={i} className={`keyword-chip ${item.category}`} title={`Category: ${item.category}`}>
+                                        {item.keywords}
+                                      </span>
+                                    ))}
+                                  {file.sensitivityExplanation.split(';').length > 5 && 
+                                    <span className="keyword-chip more-chip">
+                                      +{file.sensitivityExplanation.split(';').length - 5} more
+                                    </span>
+                                  }
+                                </div>
+                                : 
+                                <span className={`sensitivity-badge blue-badge ${file.sensitivityReason}`}>{file.sensitivityReason?.toUpperCase()}</span>
+                              }
+                            </td>
                             <td>
                               <span className={`risk-level blue-badge risk-${file.riskLevelLabel || 'unknown'}`}>
                                 {file.riskLevelLabel ? file.riskLevelLabel.toUpperCase() : 'UNKNOWN'}

@@ -436,13 +436,13 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                 "high": 0,
                 "medium": 0,
                 "low": 0
-            }
+            },
+            "by_department": {}
         },
         "scan_complete": False,
         "processed_files": 0,
         "total_files": 0,
-        "failed_files": [],
-        "content_hashes": {}
+        "failed_files": []
     }
 
     # Add logging for file type mapping
@@ -642,69 +642,7 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                                           key=lambda cat: CONTENT_RISK_WEIGHTS.get(cat, 0), 
                                           default=None)
                     file_obj["sensitivityReason"] = primary_category
-            # --- ADD BACKWARD COMPATIBILITY LAYER ---
-            # For backward compatibility, we'll add the old structure format
-            # This can be removed once all consumers are updated to use the new format
-            for age_group in ["moreThanThreeYears", "oneToThreeYears", "lessThanOneYear"]:
-                results[age_group] = {
-                    "total_documents": sum(1 for file in results["files"] if file["ageGroup"] == age_group),
-                    "total_sensitive": sum(1 for file in results["files"] if file["ageGroup"] == age_group and file["sensitiveCategories"]),
-                    "file_types": {},
-                    "sensitive_info": {}
-                }
-                
-                # Initialize file_types with empty lists
-                for file_type in file_type_map.keys() | {"others"}:
-                    results[age_group]["file_types"][file_type] = []
-                
-                # Initialize sensitive_info with empty lists
-                for category in sensitive_keywords.keys():
-                    results[age_group]["sensitive_info"][category] = []
-                
-                # Populate file_types
-                for file in results["files"]:
-                    if file["ageGroup"] == age_group:
-                        file_type = file["fileType"]
-                        # Create a copy without the new fields for backward compatibility
-                        compat_file = {
-                            "id": file["id"],
-                            "name": file["name"],
-                            "mimeType": file["mimeType"],
-                            "modifiedTime": file["modifiedTime"],
-                            "size": file["size"]
-                        }
-                        # Add backward compatibility fields if they exist
-                        if "riskLevel" in file and file["riskLevel"] is not None:
-                            compat_file["riskLevel"] = file["riskLevel"]
-                            compat_file["riskLevelLabel"] = file["riskLevelLabel"]
-                            compat_file["sensitivityReason"] = file["sensitivityReason"]
-                            compat_file["allSensitiveCategories"] = file["sensitiveCategories"]
-                            compat_file["sensitivityExplanation"] = file.get("sensitivityExplanation", "")
-                        
-                        results[age_group]["file_types"][file_type].append(compat_file)
-                
-                # Populate sensitive_info
-                for file in results["files"]:
-                    if file["ageGroup"] == age_group and file["sensitiveCategories"]:
-                        for category in file["sensitiveCategories"]:
-                            finding = {
-                                "file": {
-                                    "id": file["id"],
-                                    "name": file["name"],
-                                    "mimeType": file["mimeType"],
-                                    "modifiedTime": file["modifiedTime"],
-                                    "size": file["size"],
-                                    "riskLevel": file["riskLevel"],
-                                    "riskLevelLabel": file["riskLevelLabel"],
-                                    "sensitivityReason": file["sensitivityReason"],
-                                    "allSensitiveCategories": file["sensitiveCategories"],
-                                    "sensitivityExplanation": file.get("sensitivityExplanation", "")
-                                },
-                                "confidence": file.get("confidence", 0.8),
-                                "explanation": file.get("sensitivityExplanation", f"Found {category}"),
-                                "categories": file["sensitiveCategories"]
-                            }
-                            results[age_group]["sensitive_info"][category].append(finding)
+            # No backward compatibility layer needed
        
         except Exception as e:
             logger.error(f"Error scanning files: {str(e)}")

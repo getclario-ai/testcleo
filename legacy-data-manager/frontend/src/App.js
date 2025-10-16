@@ -28,11 +28,13 @@ function AppContent() {
       docCount: 0,
       duplicateDocuments: 0,
       sensitiveDocuments: 0,
-      ageDistribution: {
-        moreThanThreeYears: { types: {}, risks: {} },
-        oneToThreeYears: { types: {}, risks: {} },
-        lessThanOneYear: { types: {}, risks: {} }
-      }
+      files: [],
+      riskDistribution: {
+        high: 0,
+        medium: 0,
+        low: 0
+      },
+      departmentDistribution: {}
     };
   });
 
@@ -350,8 +352,44 @@ function AppContent() {
     return groupedRisks;
   };
 
-  const renderAgeSection = (data, title) => {
-    const { types, risks } = data || { types: {}, risks: {} };
+  const renderAgeSection = (ageGroup, title) => {
+    // Filter files by age group
+    const files = stats.files?.filter(file => file.ageGroup === ageGroup) || [];
+    
+    // Group files by type
+    const types = {};
+    files.forEach(file => {
+      const fileType = file.fileType || 'others';
+      if (!types[fileType]) {
+        types[fileType] = { count: 0, percentage: 0, files: [] };
+      }
+      types[fileType].count++;
+      types[fileType].files.push(file);
+    });
+    
+    // Calculate percentages for file types
+    const totalFiles = files.length;
+    Object.values(types).forEach(typeData => {
+      typeData.percentage = totalFiles > 0 ? (typeData.count / totalFiles * 100) : 0;
+    });
+    
+    // Group files by sensitivity category
+    const risks = {};
+    files.filter(file => file.sensitiveCategories?.length > 0).forEach(file => {
+      file.sensitiveCategories.forEach(category => {
+        if (!risks[category]) {
+          risks[category] = { count: 0, percentage: 0, files: [] };
+        }
+        risks[category].count++;
+        risks[category].files.push({ file });
+      });
+    });
+    
+    // Calculate percentages for risks
+    const totalSensitiveFiles = files.filter(file => file.sensitiveCategories?.length > 0).length;
+    Object.values(risks).forEach(riskData => {
+      riskData.percentage = totalSensitiveFiles > 0 ? (riskData.count / totalSensitiveFiles * 100) : 0;
+    });
     
     if (!selectedDirectory) {
       return (
@@ -365,7 +403,7 @@ function AppContent() {
       );
     }
 
-    if (!data || (!Object.keys(types).length && !Object.keys(risks).length)) {
+    if (!files.length || (!Object.keys(types).length && !Object.keys(risks).length)) {
       return (
         <div className="age-section">
           <div className="section-content">
@@ -569,11 +607,11 @@ function AppContent() {
   const renderTabContent = () => {
     switch (activeTab) {
       case 'moreThanThreeYears':
-        return renderAgeSection(stats.ageDistribution?.moreThanThreeYears, 'Files > 3 years old');
+        return renderAgeSection('moreThanThreeYears', 'Files > 3 years old');
       case 'oneToThreeYears':
-        return renderAgeSection(stats.ageDistribution?.oneToThreeYears, 'Files 1-3 years old');
+        return renderAgeSection('oneToThreeYears', 'Files 1-3 years old');
       case 'lessThanOneYear':
-        return renderAgeSection(stats.ageDistribution?.lessThanOneYear, 'Files < 1 year old');
+        return renderAgeSection('lessThanOneYear', 'Files < 1 year old');
       //case 'type':
       //  return renderFileTypeContent();
       //case 'owner':
