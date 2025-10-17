@@ -67,10 +67,6 @@ function DepartmentDashboard() {
     });
   };
 
-  const renderAgeSection = (ageGroup, ageLabel) => {
-    const ageFiles = departmentFiles.filter(file => file.ageGroup === ageGroup);
-    return <AgeGroupSection files={ageFiles} ageLabel={ageLabel} />;
-  };
 
   return (
     <div className="app-container">
@@ -140,9 +136,24 @@ function DepartmentDashboard() {
           </div>
           
           <div className="tab-content">
-            {activeTab === 'moreThanThreeYears' && renderAgeSection('moreThanThreeYears', 'Files > 3 years old')}
-            {activeTab === 'oneToThreeYears' && renderAgeSection('oneToThreeYears', 'Files 1-3 years old')}
-            {activeTab === 'lessThanOneYear' && renderAgeSection('lessThanOneYear', 'Files < 1 year old')}
+            {activeTab === 'moreThanThreeYears' && (
+              <AgeGroupSection 
+                files={departmentFiles.filter(file => file.ageGroup === 'moreThanThreeYears')} 
+                ageLabel="Files > 3 years old" 
+              />
+            )}
+            {activeTab === 'oneToThreeYears' && (
+              <AgeGroupSection 
+                files={departmentFiles.filter(file => file.ageGroup === 'oneToThreeYears')} 
+                ageLabel="Files 1-3 years old" 
+              />
+            )}
+            {activeTab === 'lessThanOneYear' && (
+              <AgeGroupSection 
+                files={departmentFiles.filter(file => file.ageGroup === 'lessThanOneYear')} 
+                ageLabel="Files < 1 year old" 
+              />
+            )}
           </div>
         </div>
       </div>
