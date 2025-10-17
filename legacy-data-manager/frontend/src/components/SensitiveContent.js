@@ -55,6 +55,7 @@ const SensitiveContent = () => {
     
     console.log('Found', sensitiveFiles.length, 'sensitive files');
     return sensitiveFiles;
+
   }, [stats]);
 
   // --- Group files by sensitivity category ---
@@ -148,8 +149,8 @@ const SensitiveContent = () => {
         });
       } else {
         // Fallback to sensitivityReason if categories array is not available
-      const reason = file.sensitivityReason || 'Unknown';
-      acc[reason] = (acc[reason] || 0) + 1;
+        const reason = file.sensitivityReason || 'Unknown';
+        acc[reason] = (acc[reason] || 0) + 1;
       }
       return acc;
     }, {});
@@ -250,7 +251,7 @@ const SensitiveContent = () => {
   };
 
   // No department assignment functions needed
-
+  
   const handleBack = () => {
     navigate(returnTo, {
       state: {

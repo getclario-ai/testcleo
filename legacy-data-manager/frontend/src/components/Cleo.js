@@ -329,6 +329,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
 
   // No transformation functions needed anymore
 
+
   const handleClean = async () => {
     if (!selectedDirectory) return;
     
