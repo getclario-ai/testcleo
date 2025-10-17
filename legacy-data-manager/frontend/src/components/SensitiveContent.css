@@ -356,23 +356,31 @@ tr.selected:hover {
   letter-spacing: 0.5px;
 }
 
+/* Risk category colors - centralized color system */
+:root {
+  --risk-pii: #e74c3c;
+  --risk-financial: #f39c12;
+  --risk-legal: #8e44ad;
+  --risk-confidential: #c0392b;
+}
+
 .sensitivity-badge.pii {
-  background-color: #e74c3c;
+  background-color: var(--risk-pii);
   color: white;
 }
 
 .sensitivity-badge.financial {
-  background-color: #f39c12;
+  background-color: var(--risk-financial);
   color: white;
 }
 
 .sensitivity-badge.legal {
-  background-color: #8e44ad;
+  background-color: var(--risk-legal);
   color: white;
 }
 
 .sensitivity-badge.confidential {
-  background-color: #c0392b;
+  background-color: var(--risk-confidential);
   color: white;
 }
 
@@ -436,13 +444,13 @@ tr.selected:hover {
 .risk-level.risk-80,
 .risk-level.risk-90,
 .risk-level.risk-100 {
-  background-color: #e74c3c;
+  background-color: var(--risk-pii);
   color: white;
 }
 
 .risk-level.risk-60,
 .risk-level.risk-70 {
-  background-color: #f39c12;
+  background-color: var(--risk-financial);
   color: white;
 }
 

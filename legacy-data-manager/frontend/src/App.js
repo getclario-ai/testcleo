@@ -9,6 +9,10 @@ import FileCategoryDetails from './components/FileCategoryDetails';
 import FileInsightsDashboard from './components/FileInsightsDashboard';
 import RiskCategoryInsightsDashboard from './components/RiskCategoryInsightsDashboard';
 import ReviewSensitiveFiles from './components/ReviewSensitiveFiles';
+import DepartmentDashboard from './components/DepartmentDashboard';
+import FileTypeChart from './components/FileTypeChart';
+import RiskCategoryChart from './components/RiskCategoryChart';
+import { getFileTypeColor, getRiskCategoryColor, getStatusColor } from './constants/colors';
 import './App.css';
 import config from './config';
 
@@ -178,12 +182,12 @@ function AppContent() {
   };
 
   const fileTypeColors = {
-    documents: '#4285F4',    // Google Blue
-    spreadsheets: '#0F9D58', // Google Green
-    presentations: '#F4B400', // Google Yellow
-    pdfs: '#DB4437',        // Google Red
-    images: '#9C27B0',      // Purple
-    others: '#757575'       // Gray
+    documents: getFileTypeColor('documents'),
+    spreadsheets: getFileTypeColor('spreadsheets'),
+    presentations: getFileTypeColor('presentations'),
+    pdfs: getFileTypeColor('pdfs'),
+    images: getFileTypeColor('images'),
+    others: getFileTypeColor('others')
   };
 
   const renderFileTypeContent = () => {
@@ -264,9 +268,9 @@ function AppContent() {
     const sensitivePercentage = total > 0 ? (sensitiveCount / total * 100) : 0;
     const cleanPercentage = total > 0 ? (cleanCount / total * 100) : 0;
 
-    // Define colors directly for clarity
-    const sensitiveColor = '#DB4437'; // Red
-    const cleanColor = '#0F9D58'; // Green
+    // Define colors using centralized color system
+    const sensitiveColor = getStatusColor('sensitive'); // Red
+    const cleanColor = getStatusColor('clean'); // Green
 
   return (
       <div className="risk-bars"> {/* Use a specific class */} 
@@ -466,88 +470,10 @@ function AppContent() {
           <h3>{title}</h3>
         </div>
         <div className="section-content file-types-card">
-          <h4>File Categories</h4>
-          <div className="type-bars">
-            {Object.entries(types)
-              .filter(([_, stats]) => stats.count > 0)
-              .sort((a, b) => b[1].count - a[1].count)
-              .map(([type, stats]) => {
-                const fileTypeColors = {
-                  documents: '#4285F4',
-                  spreadsheets: '#0F9D58',
-                  presentations: '#F4B400',
-                  pdfs: '#DB4437',
-                  images: '#9C27B0',
-                  others: '#757575'
-                };
-                return (
-                  <div
-                    key={type}
-                    className="type-bar clickable-type-bar"
-                    onClick={() => handleViewFileCategoryDetails(type)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <span className="type-label">
-                      {type.charAt(0).toUpperCase() + type.slice(1)}
-                    </span>
-                    <div className="bar-container">
-                      <div 
-                        className="bar" 
-                        style={{ 
-                          width: `${stats.percentage}%`,
-                          backgroundColor: fileTypeColors[type] || '#757575'
-                        }}
-                      ></div>
-                    </div>
-                    <div className="type-stats">
-                      <span className="type-count">{stats.count} files</span>
-                      <span className="type-percentage">{stats.percentage.toFixed(1)}%</span>
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
+          <FileTypeChart files={files} title="File Categories" />
         </div>
         <div className="section-content">
-          <h4>Risk Categories</h4>
-          <div className="type-bars">
-            {Object.entries(processedRisks)
-              .filter(([_, stats]) => stats.count > 0)
-              .sort((a, b) => b[1].count - a[1].count)
-              .map(([category, stats]) => {
-                const riskColors = {
-                  pii: '#e74c3c',
-                  financial: '#f39c12',
-                  legal: '#8e44ad',
-                  confidential: '#c0392b'
-                };
-                return (
-                  <div
-                    key={category}
-                    className="type-bar clickable-type-bar"
-                    onClick={() => handleViewDetails(category)}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <span className="type-label">
-                      {category.charAt(0).toUpperCase() + category.slice(1)}
-                    </span>
-                    <div className="bar-container">
-                      <div 
-                        className="bar" 
-                        style={{ 
-                          width: `${stats.percentage}%`,
-                          backgroundColor: riskColors[category] || '#757575'
-                        }}
-                      ></div>
-                    </div>
-                    <div className="type-stats">
-                      <span className="type-count">{stats.count} files</span>
-                      <span className="type-percentage">{stats.percentage.toFixed(1)}%</span>
-                    </div>
-                  </div>
-                );
-              })}
-          </div>
+          <RiskCategoryChart files={files} title="Risk Categories" />
         </div>
       </div>
     );
@@ -558,10 +484,10 @@ function AppContent() {
     const percentage = Math.min(totalFindings * 10, 100); // Cap at 100%
     
     const riskColors = {
-      pii: '#e74c3c',
-      financial: '#f39c12',
-      legal: '#8e44ad',
-      confidential: '#c0392b'
+      pii: getRiskCategoryColor('pii'),
+      financial: getRiskCategoryColor('financial'),
+      legal: getRiskCategoryColor('legal'),
+      confidential: getRiskCategoryColor('confidential')
     };
     
     return (
@@ -643,6 +569,7 @@ function AppContent() {
       <Route path="/sensitive-content/:ageGroup/:category" element={<RiskCategoryInsightsDashboard />} />
       <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
       <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />
+      <Route path="/department/:departmentSlug" element={<DepartmentDashboard />} />
       <Route
         path="/"
         element={
@@ -712,24 +639,35 @@ function AppContent() {
 
                 <div className="bottom-panels">
                   <div className="categories">
-                    <h3>Categories</h3>
+                    <h3>Departments</h3>
                     <div className="category-list">
-                      <div className="category-item">
-                        <span>HR</span>
-                        <button className="review-button">Review →</button>
-                      </div>
-                      <div className="category-item">
-                        <span>Finance</span>
-                        <button className="review-button">Review →</button>
-                      </div>
-                      <div className="category-item">
-                        <span>Legal</span>
-                        <button className="review-button">Review →</button>
-                      </div>
-                      <div className="category-item">
-                        <span>Operations</span>
-                        <span>0 min</span>
-                      </div>
+                      {Object.entries(stats.departmentDistribution)
+                        .filter(([_, count]) => count > 0)
+                        .sort((a, b) => b[1] - a[1]) // Sort by count descending
+                        .map(([department, count]) => (
+                          <div key={department} className="category-item">
+                            <div className="category-info">
+                              <span>{department}</span>
+                              <span>{count} files</span>
+                            </div>
+                            <a 
+                              href={`/department/${department.toLowerCase().replace(/&/g, '-and-').replace(/\s+/g, '-').replace(/-+/g, '-')}`}
+                              className="review-link"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                navigate(`/department/${department.toLowerCase().replace(/&/g, '-and-').replace(/\s+/g, '-').replace(/-+/g, '-')}`, {
+                                  state: {
+                                    selectedDirectory,
+                                    stats,
+                                    activeTab
+                                  }
+                                });
+                              }}
+                            >
+                              Review →
+                            </a>
+                          </div>
+                        ))}
                     </div>
                   </div>
 
@@ -776,6 +714,7 @@ function App() {
         <Route path="/sensitive-content/:ageGroup/:category" element={<RiskCategoryInsightsDashboard />} />
         <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
         <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />
+        <Route path="/department/:departmentSlug" element={<DepartmentDashboard />} />
         <Route
           path="/"
           element={<AppContent />}

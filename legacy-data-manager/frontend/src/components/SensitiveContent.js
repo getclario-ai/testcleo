@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import config from '../config';
+import { getRiskCategoryColor } from '../constants/colors';
 import './SensitiveContent.css';
 
 const SensitiveContent = () => {
@@ -306,12 +307,12 @@ const SensitiveContent = () => {
       // Sort by weight (highest first) to ensure consistent segment order
       .sort(([catA], [catB]) => (categoryWeights[catB] || 0) - (categoryWeights[catA] || 0))
       .map(([category, count]) => {
-        // Use the same colors as the landing dashboard
+        // Use centralized color system
         const categoryColors = {
-          'confidential': '#c0392b',
-          'pii': '#e74c3c',
-          'financial': '#f39c12',
-          'legal': '#8e44ad'
+          'confidential': getRiskCategoryColor('confidential'),
+          'pii': getRiskCategoryColor('pii'),
+          'financial': getRiskCategoryColor('financial'),
+          'legal': getRiskCategoryColor('legal')
         };
         
         // Calculate weighted percentage (category count * weight / total weight)
@@ -371,7 +372,7 @@ const SensitiveContent = () => {
                 <polyline points="9,22 9,12 15,12 15,22"/>
               </svg>
             </button>
-            <button onClick={handleBack} className="nav-button back-button" title="Go Back">
+            <button onClick={handleBack} className="nav-button back1-button" title="Go Back">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <polyline points="15,18 9,12 15,6"/>
               </svg>
@@ -543,12 +544,12 @@ const SensitiveContent = () => {
                       return (categoryWeights[catB] || 0) - (categoryWeights[catA] || 0);
                     })
                     .map(([category, count]) => {
-                      // Match colors with the landing dashboard
+                      // Use centralized color system
                       const categoryColors = {
-                        'confidential': '#c0392b',
-                        'pii': '#e74c3c',
-                        'financial': '#f39c12',
-                        'legal': '#8e44ad'
+                        'confidential': getRiskCategoryColor('confidential'),
+                        'pii': getRiskCategoryColor('pii'),
+                        'financial': getRiskCategoryColor('financial'),
+                        'legal': getRiskCategoryColor('legal')
                       };
                     const icons = {
                       'pii': '👤',

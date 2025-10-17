@@ -346,6 +346,38 @@ def classify_by_age(modified_time):
     else:
         return "moreThanThreeYears"
 
+def get_department_from_owner(owners):
+    """
+    Determine department based on file owner email addresses.
+    
+    Args:
+        owners: List of owner objects from Google Drive API
+        
+    Returns:
+        str: Department name
+    """
+    if not owners:
+        return "Others"
+    
+    # Extract email addresses from owners
+    owner_emails = []
+    for owner in owners:
+        if isinstance(owner, dict) and 'emailAddress' in owner:
+            owner_emails.append(owner['emailAddress'].lower())
+        elif isinstance(owner, str):
+            owner_emails.append(owner.lower())
+    
+    # Map emails to departments
+    for email in owner_emails:
+        if email == "yousuf@getclario.ai":
+            return "Sales & Marketing"
+        elif email == "vanessa@getclario.ai":
+            return "Operations"
+        elif email == "madhu@getclario.ai":
+            return "R&D"
+    
+    return "Others"
+
 def initialize_structure():
     """Initialize the structure for file categorization."""
     return {
@@ -521,6 +553,9 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                     # Update type counts
                     type_counts[file_type] += 1
                     
+                    # Determine department from file owners
+                    department = get_department_from_owner(file.get('owners', []))
+                    
                     # Create a standardized file object
                     file_dict = {
                         "id": file_id,
@@ -534,7 +569,7 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                         "sensitiveCategories": [],
                         "riskLevel": None,
                         "riskLevelLabel": None,
-                        "department": None  # Will be populated later
+                        "department": department
                     }
                     
                     # Add to the flat files array
@@ -543,6 +578,11 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                     # Update statistics
                     results["stats"]["by_file_type"][file_type] += 1
                     results["stats"]["by_age_group"][age_group] += 1
+                    
+                    # Update department statistics
+                    if department not in results["stats"]["by_department"]:
+                        results["stats"]["by_department"][department] = 0
+                    results["stats"]["by_department"][department] += 1
 
                     # Only scan content for text-based files
                     if file_type in ['documents', 'spreadsheets', 'presentations', 'pdfs']:

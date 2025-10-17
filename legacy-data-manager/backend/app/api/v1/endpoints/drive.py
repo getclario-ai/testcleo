@@ -395,13 +395,10 @@ async def debug_log(request: Request):
 async def list_departments():
     """List all available departments"""
     departments = [
-        {"id": "hr", "name": "HR / People Ops", "description": "Human Resources and People Operations"},
-        {"id": "finance", "name": "Finance / Accounting", "description": "Financial and accounting operations"},
-        {"id": "operations", "name": "Operations / Admin", "description": "Administrative and operational tasks"},
-        {"id": "legal", "name": "Legal / Compliance", "description": "Legal and compliance matters"},
-        {"id": "engineering", "name": "Engineering / Product", "description": "Engineering and product development"},
-        {"id": "marketing", "name": "Marketing / Sales", "description": "Marketing and sales activities"},
-        {"id": "support", "name": "Customer Support", "description": "Customer service and support"}
+        {"id": "sales-and-marketing", "name": "Sales & Marketing", "description": "Sales and marketing activities"},
+        {"id": "operations", "name": "Operations", "description": "Administrative and operational tasks"},
+        {"id": "r-and-d", "name": "R&D", "description": "Research and development"},
+        {"id": "others", "name": "Others", "description": "Other departments and unclassified files"}
     ]
     return departments
 
@@ -506,4 +503,4 @@ async def list_department_files(
         }
     except Exception as e:
         logger.error(f"Error listing department files: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
