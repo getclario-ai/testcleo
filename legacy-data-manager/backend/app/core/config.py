@@ -1,6 +1,8 @@
 from pydantic_settings import BaseSettings
-from typing import Optional, List
+from pydantic import field_validator
+from typing import Optional, List, Union
 from functools import lru_cache
+import json
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Legacy Data Manager"
@@ -20,8 +22,21 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: Optional[str] = None
     POSTGRES_DB: Optional[str] = None
     
-    # CORS
+    # CORS - pydantic-settings expects JSON string for List fields
+    # Set as: ["https://example.com"] in Render env vars
     BACKEND_CORS_ORIGINS: List[str] = ["*"]  # Adjust in production
+    
+    @field_validator('BACKEND_CORS_ORIGINS', mode='before')
+    @classmethod
+    def parse_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        """Parse CORS origins from JSON string or list"""
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                # If not JSON, treat as comma-separated string
+                return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
     
     # Google Drive Settings
     GOOGLE_DRIVE_CREDENTIALS_FILE: str = "credentials.json" # Or adjust based on your setup
