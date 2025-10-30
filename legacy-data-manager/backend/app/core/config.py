@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     SLACK_SIGNING_SECRET: str
     SLACK_BOT_TOKEN: str
     SLACK_APP_TOKEN: Optional[str] = None # Optional depending on Slack connection mode
+    SLACK_NOTIFICATION_CHANNEL: str = "legacydata" # Channel for scan notifications
     
     class Config:
         env_file = ".env"

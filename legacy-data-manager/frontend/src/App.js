@@ -56,6 +56,89 @@ function AppContent() {
     }
   }, [stats]);
 
+  // Check for directory parameter in URL (from Slack deep link)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const directoryId = urlParams.get('directory');
+    
+    if (directoryId && (!selectedDirectory || selectedDirectory.id !== directoryId)) {
+      console.log('Loading directory from URL parameter:', directoryId);
+      
+      // Auto-trigger analysis for this directory
+      // First, set it as selected
+      setSelectedDirectory({ id: directoryId, name: 'Loading...' });
+      
+      // Then fetch directory name and trigger analysis
+      const analyzeFromUrl = async () => {
+        try {
+          // First, get directory metadata to get the name
+          let directoryName = directoryId; // Default to ID if name unavailable
+          try {
+            const metadataResponse = await fetch(`${config.apiBaseUrl}/api/v1/drive/files/${directoryId}`, {
+              method: 'GET',
+              headers: {
+                'Accept': 'application/json'
+              },
+              credentials: 'include'
+            });
+            
+            if (metadataResponse.ok) {
+              const metadata = await metadataResponse.json();
+              if (metadata.name) {
+                directoryName = metadata.name;
+                // Update selectedDirectory with name immediately
+                setSelectedDirectory({ id: directoryId, name: directoryName });
+              }
+            }
+          } catch (error) {
+            console.warn('Could not fetch directory metadata:', error);
+          }
+          
+          // Now trigger the analysis
+          const response = await fetch(`${config.apiBaseUrl}/api/v1/drive/directories/${directoryId}/analyze`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json'
+            },
+            credentials: 'include'
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            
+            // Use directory from response if available (has name), otherwise use what we fetched
+            const responseDirectory = data.directory || {};
+            const finalDirectoryName = responseDirectory.name || directoryName || directoryId;
+            
+            // Transform data structure
+            const transformedData = {
+              directory: { id: directoryId, name: finalDirectoryName },
+              docCount: data.stats?.total_documents || 0,
+              duplicateDocuments: data.stats?.total_duplicates || 0,
+              sensitiveDocuments: data.stats?.total_sensitive || 0,
+              departmentDistribution: data.stats?.by_department || {},
+              riskDistribution: data.stats?.by_risk_level || {
+                high: 0,
+                medium: 0,
+                low: 0
+              },
+              files: data.files || []
+            };
+            
+            setStats(transformedData);
+            setSelectedDirectory(transformedData.directory);
+            console.log('Auto-loaded directory analysis from URL');
+          }
+        } catch (error) {
+          console.error('Error loading directory from URL:', error);
+        }
+      };
+      
+      analyzeFromUrl();
+    }
+  }, [location.search]);
+
   const handleCleoCommand = (command) => {
     switch (command.name.toLowerCase()) {
       case 'list directories':
@@ -581,7 +664,7 @@ function AppContent() {
             <div className="app-content">
               <div className="dashboard-section">
                 <div className="document-overview">
-                  <h2>Scanning {selectedDirectory ? `: ${selectedDirectory.name}` : ''}</h2>
+                  <h2>Scanning{selectedDirectory ? `: ${selectedDirectory.name || selectedDirectory.id}` : ''}</h2>
                   <div className="stats-grid">
                     <div className="stat-card" title="Total documents in this drive">
                       <div className="stat-number">

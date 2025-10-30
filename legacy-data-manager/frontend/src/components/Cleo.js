@@ -275,9 +275,15 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
       localStorage.removeItem('fid_stats');
       localStorage.removeItem('rcid_stats');
       
+      // Use directory from response if available (has name), otherwise use what we have
+      const responseDirectory = data.directory || {};
+      const finalDirectory = responseDirectory.name 
+        ? { id: directory.id, name: responseDirectory.name }
+        : directory;
+      
       // Transform data to match expected structure for the frontend
       const transformedData = {
-        directory: directory,
+        directory: finalDirectory,
         docCount: data.stats?.total_documents || 0,
         duplicateDocuments: data.stats?.total_duplicates || 0,
         sensitiveDocuments: data.stats?.total_sensitive || 0,
@@ -314,7 +320,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
 
       setMessages(prev => [...prev, {
         type: 'assistant',
-        content: `Analysis complete for "${directory.name}". Check the dashboard for detailed insights.`
+        content: `Analysis complete for "${finalDirectory.name}". Check the dashboard for detailed insights.`
       }]);
     } catch (error) {
       console.error('Analysis error:', error);
@@ -445,8 +451,8 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
     <div className="cleo-container">
       <div className="cleo-header">
         <div className="cleo-header-left">
-          <div className="cleo-avatar">K</div>
-          <div className="cleo-name">Cleo</div>
+          <div className="cleo-avatar">Zo</div>
+          <div className="cleo-name">Zohra</div>
         </div>
         <button className="cleo-more">⋯</button>
       </div>

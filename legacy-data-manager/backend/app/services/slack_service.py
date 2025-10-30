@@ -6,10 +6,40 @@ from ..db.models import SlackUser
 from sqlalchemy.orm import Session
 import logging
 import json
+import ssl
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# Configure SSL certificates for macOS compatibility
+# This ensures Slack API calls work on macOS where Python might not find system certificates
+try:
+    import certifi
+    # Set SSL certificate file environment variable for urllib (used by Slack SDK)
+    os.environ['SSL_CERT_FILE'] = certifi.where()
+    os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+    
+    # Also patch ssl._create_default_https_context to use certifi
+    # This ensures urllib uses certifi certificates
+    _original_create_context = ssl._create_default_https_context
+    
+    def _create_https_context_certifi(*args, **kwargs):
+        ctx = _original_create_context(*args, **kwargs)
+        ctx.load_verify_locations(certifi.where())
+        return ctx
+    
+    ssl._create_default_https_context = _create_https_context_certifi
+    
+    logger.debug(f"Configured SSL certificates using certifi: {certifi.where()}")
+except ImportError:
+    logger.warning("certifi not available - SSL certificate verification may fail on macOS")
+    logger.warning("Install certifi: pip install certifi")
+    # On macOS, try to use the system certificates
+    # If this fails, user should run: /Applications/Python\ 3.12/Install\ Certificates.command
+except Exception as e:
+    logger.warning(f"Could not configure SSL certificates: {e}")
 
 class SlackMessageTemplates:
     @staticmethod
@@ -166,23 +196,16 @@ class SlackMessageTemplates:
             "blocks": [
                 {
                     "type": "header",
-                    "text": {"type": "plain_text", "text": "Available Commands 🤖"}
+                    "text": {"type": "plain_text", "text": "Zo - Your Drive Assistant 🤖"}
                 },
                 {
                     "type": "section",
                     "text": {"type": "mrkdwn", "text": 
-                        "*Immediate Insights:*\n" +
-                        "• `/grbg status` - Quick health score and urgent items\n" +
-                        "• `/grbg hot` - Show highest priority items right now\n\n" +
-                        "*Analysis Commands:*\n" +
-                        "• `/grbg analyze [dir] --quick` - Fast surface scan\n" +
-                        "• `/grbg analyze [dir] --deep` - Comprehensive analysis in dashboard\n" +
-                        "• `/grbg summary [dir] --risks` - Security-focused summary\n" +
-                        "• `/grbg summary [dir] --storage` - Storage-focused summary\n" +
-                        "• `/grbg summary [dir] --access` - Access patterns summary\n\n" +
-                        "*Intelligent Actions:*\n" +
-                        "• `/grbg suggest` - Get AI-powered recommendations\n" +
-                        "• `/grbg automate` - View/configure automatic actions"
+                        "*Available Commands:*\n\n" +
+                        "• `/zo help` - Show this help message\n" +
+                        "• `/zo connect` - Connect your Google Drive\n" +
+                        "• `/zo list` - List your directories\n" +
+                        "• `/zo scan [directory]` - Scan a directory and show files by age"
                     }
                 }
             ]
@@ -190,11 +213,30 @@ class SlackMessageTemplates:
 
 class SlackService:
     def __init__(self, chat_service: ChatService, db: Session):
+        # Initialize Slack client
+        # SSL certificates are configured at module level via environment variables
         self.client = WebClient(token=settings.SLACK_BOT_TOKEN)
+        
         self.chat_service = chat_service
         self.db = db
         self.templates = SlackMessageTemplates()
         self.dashboard_base_url = settings.FRONTEND_URL
+        self._bot_info_cache = None
+    
+    def get_bot_name(self) -> str:
+        """
+        Get the bot's display name for notifications/invites.
+        Caches the result to avoid repeated API calls.
+        """
+        if self._bot_info_cache is None:
+            try:
+                result = self.client.auth_test()
+                self._bot_info_cache = result.get("user", "Zo")
+                logger.info(f"Bot name retrieved: {self._bot_info_cache}")
+            except Exception as e:
+                logger.warning(f"Could not get bot name from Slack API: {e}")
+                self._bot_info_cache = "Zo"  # Default fallback
+        return self._bot_info_cache
         
     async def is_user_authenticated(self, user_id: str) -> bool:
         """Check if a user is authenticated with Google Drive"""
@@ -307,25 +349,19 @@ class SlackService:
             command = parts[0].lower()
             args = parts[1:] if len(parts) > 1 else []
 
-            # Command handlers for /grbg commands
+            # Command handlers for /zo commands
             handlers = {
                 "help": self._handle_help,
-                "status": self._handle_status,
-                "hot": self._handle_hot,
-                "analyze": self._handle_analyze,
-                "summary": self._handle_summary,
-                "suggest": self._handle_suggest,
-                "automate": self._handle_automate,
-                # Legacy commands for backward compatibility
+                "connect": self._handle_connect,
                 "list": self._handle_list,
-                "risks": self._handle_risks
+                "scan": self._handle_scan
             }
 
             handler = handlers.get(command)
             if not handler:
                 return {
                     "response_type": "ephemeral",
-                    "text": f"Unknown command: {command}. Try `/grbg help` for available commands."
+                    "text": f"Unknown command: {command}. Try `/zo help` for available commands."
                 }
 
             return await handler(args, user_id, channel_id)
@@ -340,24 +376,38 @@ class SlackService:
     async def _handle_help(self, args: List[str], user_id: str, channel_id: str) -> Dict:
         return self.templates.help_message()
 
-    async def _handle_status(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+    async def _handle_connect(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+        """Handle Google Drive connection"""
         try:
-            # Get drive statistics from chat service
-            stats = await self.chat_service.get_drive_stats()
+            # For testing: using shared Google Drive session from web dashboard
+            # Check if the main drive service is authenticated
+            is_authenticated = await self.chat_service.drive_service.is_authenticated()
             
-            # Calculate health score (implement this logic)
-            health_score = self._calculate_health_score(stats)
+            if is_authenticated:
+                return {
+                    "blocks": [
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": "✅ Connected to Google Drive! (using shared session for testing)"}
+                        }
+                    ]
+                }
             
-            # Determine urgent items
-            urgent_items = self._get_urgent_items(stats)
-            
-            # Just point to the main dashboard
-            dashboard_url = f"{self.dashboard_base_url}"
-            
-            return self.templates.status_message(health_score, urgent_items, dashboard_url)
+            return {
+                "blocks": [
+                    {
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": 
+                            "❌ *Not Connected*\n\n" +
+                            "Please authenticate via the web dashboard first:\n" +
+                            f"{self.dashboard_base_url}"
+                        }
+                    }
+                ]
+            }
         except Exception as e:
-            logger.error(f"Error in status command: {str(e)}", exc_info=True)
-            return {"response_type": "ephemeral", "text": f"Error getting status: {str(e)}"}
+            logger.error(f"Error in connect command: {str(e)}", exc_info=True)
+            return {"response_type": "ephemeral", "text": f"Error connecting: {str(e)}"}
 
     async def _handle_analyze(self, args: List[str], user_id: str, channel_id: str) -> Dict:
         if not args:
@@ -495,6 +545,7 @@ class SlackService:
 
     async def _handle_list(self, args: List[str], user_id: str, channel_id: str) -> Dict:
         try:
+            # For testing: skip Slack user auth, use shared Drive session
             # Use the chat service's list handler
             response = await self.chat_service._handle_list("")
             
@@ -503,7 +554,7 @@ class SlackService:
                 "blocks": [
                     {
                         "type": "header",
-                        "text": {"type": "plain_text", "text": "Available Directories 📁"}
+                        "text": {"type": "plain_text", "text": "Your Directories 📁"}
                     },
                     {
                         "type": "section",
@@ -514,6 +565,186 @@ class SlackService:
         except Exception as e:
             logger.error(f"Error in list command: {str(e)}", exc_info=True)
             return {"response_type": "ephemeral", "text": f"Error listing directories: {str(e)}"}
+
+    async def _handle_scan(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+        """Scan a directory and show files by age"""
+        if not args:
+            return {
+                "response_type": "ephemeral",
+                "text": "Please specify a directory. Usage: `/zo scan [directory_id or name]`\n\nTip: Use `/zo list` to see available directories."
+            }
+
+        directory_input = " ".join(args)
+        
+        try:
+            # Try to resolve directory name to ID if needed
+            # This ensures we use the same cache key as the web dashboard
+            directory = directory_input
+            
+            # If it looks like a name (not a long ID), try to find the ID
+            if len(directory_input) < 20:  # IDs are typically longer
+                try:
+                    # Get list of directories
+                    response = await self.chat_service._handle_list("")
+                    content = response.get("content", "")
+                    
+                    # Parse the directory list to find matching name
+                    # Format is: "- DirectoryName (ID: 1a2b3c4d)"
+                    import re
+                    for line in content.split('\n'):
+                        match = re.search(rf'- (.+?) \(ID: (.+?)\)', line)
+                        if match:
+                            name, dir_id = match.groups()
+                            if name.lower().strip() == directory_input.lower().strip():
+                                directory = dir_id
+                                logger.info(f"Resolved directory name '{directory_input}' to ID '{directory}'")
+                                break
+                except Exception as e:
+                    logger.warning(f"Could not resolve directory name: {e}")
+                    # Continue with original input
+            
+            # Check cache first for quick response
+            cached_result = self.chat_service.scan_cache.get_cached_result(directory)
+            
+            if cached_result:
+                # We have cached data, return it immediately
+                stats = cached_result.get('stats', {})
+                by_age = stats.get('by_age_group', {})
+                
+                more_than_3y = by_age.get('moreThanThreeYears', 0)
+                one_to_3y = by_age.get('oneToThreeYears', 0)
+                less_than_1y = by_age.get('lessThanOneYear', 0)
+                total = more_than_3y + one_to_3y + less_than_1y
+                
+                # Show the name if it was resolved, otherwise show the ID
+                display_name = directory_input if directory != directory_input else directory
+                
+                return {
+                    "blocks": [
+                        {
+                            "type": "header",
+                            "text": {"type": "plain_text", "text": "Scan Results 📊 (cached)"}
+                        },
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": 
+                                f"*Directory:* {display_name}\n" +
+                                f"*Total Files:* {total}\n\n" +
+                                "*Files by Age:*\n" +
+                                f"• More than 3 years: {more_than_3y}\n" +
+                                f"• 1-3 years: {one_to_3y}\n" +
+                                f"• Less than 1 year: {less_than_1y}"
+                            }
+                        },
+                        {
+                            "type": "actions",
+                            "elements": [
+                                {
+                                    "type": "button",
+                                    "text": {"type": "plain_text", "text": "View Full Dashboard"},
+                                    "url": f"{self.dashboard_base_url}?directory={directory}"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            else:
+                # No cache - need to scan
+                # Try to do a quick scan (with timeout)
+                logger.info(f"Starting scan for directory: {directory}")
+                
+                # Start the scan in the background (will continue even if we timeout)
+                import asyncio
+                
+                async def background_scan():
+                    """Run scan in background and cache results"""
+                    try:
+                        logger.info(f"Background scan starting for: {directory}")
+                        results = await self.chat_service.analyze_directory(directory)
+                        logger.info(f"Background scan completed for: {directory}")
+                        # Results are automatically cached by analyze_directory
+                        return results
+                    except Exception as e:
+                        logger.error(f"Background scan failed for {directory}: {str(e)}", exc_info=True)
+                        return None
+                
+                # Create background task that continues after we return
+                scan_task = asyncio.create_task(background_scan())
+                
+                try:
+                    # Try to wait for quick results
+                    results = await asyncio.wait_for(scan_task, timeout=2.5)
+                    
+                    # Check if scan succeeded
+                    if not results:
+                        return {
+                            "response_type": "ephemeral",
+                            "text": f"Error: Could not scan directory '{directory}'. Please check the directory ID."
+                        }
+                    
+                    # Scan completed quickly! Extract and return results
+                    stats = results.get('stats', {})
+                    by_age = stats.get('by_age_group', {})
+                    
+                    more_than_3y = by_age.get('moreThanThreeYears', 0)
+                    one_to_3y = by_age.get('oneToThreeYears', 0)
+                    less_than_1y = by_age.get('lessThanOneYear', 0)
+                    total = more_than_3y + one_to_3y + less_than_1y
+                    
+                    # Show the name if it was resolved, otherwise show the ID
+                    display_name = directory_input if directory != directory_input else directory
+                    
+                    return {
+                        "blocks": [
+                            {
+                                "type": "header",
+                                "text": {"type": "plain_text", "text": "Scan Results 📊"}
+                            },
+                            {
+                                "type": "section",
+                                "text": {"type": "mrkdwn", "text": 
+                                    f"*Directory:* {display_name}\n" +
+                                    f"*Total Files:* {total}\n\n" +
+                                    "*Files by Age:*\n" +
+                                    f"• More than 3 years: {more_than_3y}\n" +
+                                    f"• 1-3 years: {one_to_3y}\n" +
+                                    f"• Less than 1 year: {less_than_1y}"
+                                }
+                            },
+                            {
+                                "type": "actions",
+                                "elements": [
+                                    {
+                                        "type": "button",
+                                        "text": {"type": "plain_text", "text": "View Full Dashboard"},
+                                        "url": f"{self.dashboard_base_url}?directory={directory}"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                except asyncio.TimeoutError:
+                    # Scan is taking too long, but continues in background
+                    logger.warning(f"Scan timeout for directory: {directory}, continuing in background")
+                    # Note: scan_task continues running and will cache results when done
+                    display_name = directory_input if directory != directory_input else directory
+                    return {
+                        "blocks": [
+                            {
+                                "type": "section",
+                                "text": {"type": "mrkdwn", "text": 
+                                    f"🔄 *Scanning directory:* {display_name}\n\n" +
+                                    "This directory is large and is being scanned in the background.\n\n" +
+                                    f"View results in the dashboard: {self.dashboard_base_url}\n\n" +
+                                    "💡 _Tip: Run this command again in 30 seconds to see cached results instantly!_"
+                                }
+                            }
+                        ]
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error in scan command: {str(e)}", exc_info=True)
+            return {"response_type": "ephemeral", "text": f"Error scanning directory: {str(e)}"}
 
     async def _handle_risks(self, args: List[str], user_id: str, channel_id: str) -> Dict:
         if not args:
@@ -1017,4 +1248,60 @@ class SlackService:
             )
             logger.debug(f"Message sent to channel {channel}")
         except SlackApiError as e:
-            logger.error(f"Error sending message: {str(e)}", exc_info=True) 
+            logger.error(f"Error sending message: {str(e)}", exc_info=True)
+
+    async def send_notification_blocks(self, channel: str, blocks: List[Dict]) -> None:
+        """Send formatted blocks to a Slack channel"""
+        try:
+            logger.info(f"Attempting to send notification to channel: {channel}")
+            logger.debug(f"Notification blocks: {json.dumps(blocks, indent=2)}")
+            
+            # Try to find channel by name first, then by ID
+            # Slack API accepts channel names without # prefix
+            channel_id = channel
+            if not channel.startswith('C') and len(channel) < 20:  # Not a channel ID (IDs start with C and are longer)
+                # Try to resolve channel name to ID
+                try:
+                    # First, try without # prefix
+                    result = self.client.conversations_list(types="public_channel,private_channel", limit=200)
+                    for ch in result.get("channels", []):
+                        if ch["name"] == channel or ch["name"] == channel.lstrip("#"):
+                            channel_id = ch["id"]
+                            logger.info(f"Resolved channel name '{channel}' to ID: {channel_id}")
+                            break
+                    else:
+                        logger.warning(f"Channel '{channel}' not found in workspace. Make sure:")
+                        logger.warning(f"  1. The channel exists")
+                        logger.warning(f"  2. The bot is invited to the channel: /invite @YourBotName")
+                        logger.warning(f"  3. The bot has 'chat:write' scope for the channel")
+                except Exception as e:
+                    logger.warning(f"Could not resolve channel name '{channel}' to ID: {e}, using as-is")
+            
+            response = self.client.chat_postMessage(
+                channel=channel_id,
+                blocks=blocks
+            )
+            logger.info(f"Notification sent successfully to channel {channel_id} (name: {channel})")
+            return response
+        except SlackApiError as e:
+            error_code = e.response.get("error", "unknown") if e.response else "unknown"
+            logger.error(f"Slack API error sending notification to {channel}: {str(e)}")
+            logger.error(f"Error response: {e.response}")
+            
+            if error_code == "not_in_channel":
+                logger.error("=" * 60)
+                logger.error("ACTION REQUIRED: Bot is not in the channel!")
+                logger.error(f"To fix: Invite your bot to #{channel} in Slack:")
+                logger.error(f"  1. Go to #{channel} in Slack")
+                logger.error(f"  2. Type: /invite @YourBotName")
+                logger.error(f"  3. Or add the bot manually via channel settings")
+                logger.error("=" * 60)
+            elif error_code == "channel_not_found":
+                logger.error(f"Channel '{channel}' does not exist. Check the channel name.")
+            elif error_code == "missing_scope":
+                logger.error("Bot is missing required OAuth scope. Add 'chat:write' scope in Slack app settings.")
+            
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error sending notification: {str(e)}", exc_info=True)
+            raise 
