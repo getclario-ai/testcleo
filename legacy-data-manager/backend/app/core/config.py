@@ -23,8 +23,15 @@ class Settings(BaseSettings):
     POSTGRES_DB: Optional[str] = None
     
     # CORS - pydantic-settings expects JSON string for List fields
-    # Set as: ["https://example.com"] in Render env vars
-    BACKEND_CORS_ORIGINS: List[str] = ["*"]  # Adjust in production
+    # For Render: Set as JSON string: ["https://testcleo.netlify.app"]
+    # OR comma-separated: https://testcleo.netlify.app
+    # Default includes localhost for development and Netlify for production
+    BACKEND_CORS_ORIGINS: List[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://testcleo.netlify.app",
+        "https://www.testcleo.netlify.app"  # Netlify can serve both www and non-www
+    ]
     
     @field_validator('BACKEND_CORS_ORIGINS', mode='before')
     @classmethod

@@ -217,12 +217,13 @@ async def list_inactive_files():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/files/{file_id}")
-async def get_file_metadata(file_id: str):
+async def get_file_metadata(
+    file_id: str,
+    drive_service: GoogleDriveService = Depends(get_current_user)
+):
     """Get metadata for a specific file."""
-    if not drive_service.is_authenticated():
-        raise HTTPException(status_code=401, detail="Not authenticated. Please authenticate first.")
     try:
-        metadata = drive_service.get_file_metadata(file_id)
+        metadata = await drive_service.get_file_metadata(file_id)
         return metadata
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
