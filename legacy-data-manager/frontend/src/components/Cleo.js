@@ -31,7 +31,6 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [showDirectorySelection, setShowDirectorySelection] = useState(false);
   const [showAnalysisOptions, setShowAnalysisOptions] = useState(false);
-  const [error, setError] = useState(null);
   
   const location = useLocation();
 
@@ -50,7 +49,6 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
     const errorMessage = urlParams.get('message');
     
     if (authError === 'error') {
-      setError(errorMessage || 'Failed to authenticate with Google Drive');
       setMessages(prev => [...prev, {
         type: 'assistant',
         content: `Authentication failed: ${errorMessage || 'Please try connecting again.'}`
@@ -72,7 +70,11 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
     const initializeConnection = async () => {
       try {
         const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/status`, {
-          ...config.fetchOptions
+          method: 'GET',
+          credentials: 'include',
+          headers: {
+            'Accept': 'application/json',
+          }
         });
         console.log('Initial connection check response:', response);
         const data = await response.json();
@@ -94,30 +96,6 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
 
     initializeConnection();
   }, [location]);
-
-  const handleCheckConnection = async () => {
-    console.log('Checking connection status...');
-    try {
-      const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/status`, {
-        ...config.fetchOptions
-      });
-      console.log('Connection check response:', response);
-      const data = await response.json();
-      console.log('Connection check data:', data);
-      
-      const connected = data.isAuthenticated === true;
-      console.log('Setting connection state to:', connected);
-      setIsConnected(connected);
-      
-      if (connected) {
-        console.log('Connected, fetching directories...');
-        await fetchDirectories();
-      }
-    } catch (error) {
-      console.error('Error checking connection:', error);
-      setIsConnected(false);
-    }
-  };
 
   const handleConnect = async () => {
     console.log('Initiating connection...');
@@ -448,13 +426,41 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
   };
 
   return (
-    <div className="cleo-container">
+      <div className="cleo-container">
       <div className="cleo-header">
         <div className="cleo-header-left">
           <div className="cleo-avatar">Zo</div>
           <div className="cleo-name">Zohra</div>
         </div>
-        <button className="cleo-more">⋯</button>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          {isConnected && (
+            <button
+              onClick={async () => {
+                try {
+                  const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/logout`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: { 'Accept': 'application/json' }
+                  });
+                  if (response.ok) {
+                    setIsConnected(false);
+                    localStorage.removeItem('isAuthenticated');
+                    window.location.reload();
+                  }
+                } catch (error) {
+                  console.error('Logout error:', error);
+                  setIsConnected(false);
+                  window.location.reload();
+                }
+              }}
+              className="cleo-logout-button"
+              title="Sign out"
+            >
+              Sign Out
+            </button>
+          )}
+          <button className="cleo-more">⋯</button>
+        </div>
       </div>
       
       <div className="cleo-content">
