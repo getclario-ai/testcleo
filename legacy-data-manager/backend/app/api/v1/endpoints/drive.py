@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, Depends, status
+from fastapi import APIRouter, HTTPException, Request, Depends, status, BackgroundTasks
 from typing import Dict, List, Optional
 from ....services.google_drive import GoogleDriveService
 from ....core.config import settings
@@ -11,6 +11,10 @@ import asyncio
 from ....core.auth import get_current_user
 from ....services.file_scanner_with_json import scan_files
 from ....services.scan_cache_service import ScanCacheService
+from ....services.slack_service import SlackService
+from ....services.chat_service import ChatService
+from ....services.notification_service import NotificationService
+from ....db.database import get_db, SessionLocal
 from asyncio import Lock, TimeoutError
 
 # Set up logging
@@ -20,6 +24,55 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 drive_service = GoogleDriveService()
 scan_cache = ScanCacheService()
+
+
+async def _trigger_notifications(
+    directory_id: str,
+    drive_service: GoogleDriveService,
+    scan_results: Dict
+) -> None:
+    """
+    Trigger notifications for scan results.
+    Called asynchronously so it doesn't block the scan response.
+    """
+    try:
+        logger.info(f"Triggering notifications for directory {directory_id}")
+        
+        # Get directory name for notification
+        directory_name = directory_id  # Default to ID if name unavailable
+        try:
+            directory_metadata = await drive_service.get_file_metadata(directory_id)
+            if directory_metadata and 'name' in directory_metadata:
+                directory_name = directory_metadata['name']
+                logger.info(f"Directory name for notification: {directory_name}")
+        except Exception as e:
+            logger.warning(f"Could not get directory name for notification: {e}")
+        
+        # Create services for notifications
+        db = SessionLocal()
+        try:
+            chat_service = ChatService(drive_service)
+            slack_service = SlackService(chat_service=chat_service, db=db)
+            notification_service = NotificationService(slack_service=slack_service)
+            
+            # Check if notifications should be sent
+            notification_flags = notification_service.should_send_notification(scan_results)
+            logger.info(f"Notification flags: {notification_flags}")
+            logger.info(f"Scan stats: {scan_results.get('stats', {})}")
+            
+            # Send notifications (this is already async, and we're in an async context)
+            await notification_service.send_scan_notifications(
+                directory_id=directory_id,
+                directory_name=directory_name,
+                scan_results=scan_results
+            )
+            logger.info(f"Notification process completed for {directory_name}")
+        finally:
+            db.close()
+    except Exception as e:
+        # Don't fail the scan if notifications fail
+        logger.error(f"Error in notification trigger: {str(e)}", exc_info=True)
+
 
 def determine_file_type(file: Dict) -> str:
     """
@@ -74,10 +127,18 @@ async def auth_callback_redirect(code: str):
     return RedirectResponse(url=f"/api/v1/auth/google/callback?code={code}")
 
 @router.get("/auth/status")
-async def get_auth_status_redirect():
-    """Redirect to the new auth status endpoint."""
-    logger.info("Redirecting old auth status endpoint to new endpoint")
-    return RedirectResponse(url="/api/v1/auth/google/status")
+async def get_auth_status_redirect(drive_service: GoogleDriveService = Depends(get_current_user)):
+    """Check Google Drive authentication status."""
+    try:
+        is_authenticated = await drive_service.is_authenticated()
+        return {
+            "isAuthenticated": is_authenticated,
+            "userType": "cleo",
+            "detail": "Successfully checked authentication status"
+        }
+    except Exception as e:
+        logger.error(f"Error checking auth status: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/files")
 async def list_files(
@@ -156,12 +217,13 @@ async def list_inactive_files():
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/files/{file_id}")
-async def get_file_metadata(file_id: str):
+async def get_file_metadata(
+    file_id: str,
+    drive_service: GoogleDriveService = Depends(get_current_user)
+):
     """Get metadata for a specific file."""
-    if not drive_service.is_authenticated():
-        raise HTTPException(status_code=401, detail="Not authenticated. Please authenticate first.")
     try:
-        metadata = drive_service.get_file_metadata(file_id)
+        metadata = await drive_service.get_file_metadata(file_id)
         return metadata
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -271,17 +333,38 @@ def initialize_response_structure():
 @router.post("/directories/{folder_id}/analyze")
 async def analyze_directory(
     folder_id: str,
+    background_tasks: BackgroundTasks,
     drive_service: GoogleDriveService = Depends(get_current_user),
 ):
     try:
+        # Fetch directory metadata to include in response
+        directory_metadata = None
+        try:
+            directory_metadata = await drive_service.get_file_metadata(folder_id)
+        except Exception as e:
+            logger.warning(f"Could not fetch directory metadata for {folder_id}: {e}")
+        
         # Check cache first
         cached_result = scan_cache.get_cached_result(folder_id)
         if cached_result:
             logger.info(f"Using cached result for directory {folder_id}")
+            # Add directory metadata to cached result if available
+            if directory_metadata:
+                cached_result["directory"] = {
+                    "id": folder_id,
+                    "name": directory_metadata.get("name", folder_id)
+                }
             return cached_result
 
         # Initialize response structure
         response = initialize_response_structure()
+        
+        # Add directory metadata to response
+        if directory_metadata:
+            response["directory"] = {
+                "id": folder_id,
+                "name": directory_metadata.get("name", folder_id)
+            }
         
         # Get files in directory
         try:
@@ -300,6 +383,13 @@ async def analyze_directory(
         try:
             response = await scan_files(source='gdrive', path_or_drive_id=folder_id)
             response["scan_complete"] = True
+            
+            # Ensure directory metadata is in response
+            if directory_metadata:
+                response["directory"] = {
+                    "id": folder_id,
+                    "name": directory_metadata.get("name", folder_id)
+                }
             
             # Cache the results
             scan_cache.update_cache(folder_id, response)
@@ -325,6 +415,16 @@ async def analyze_directory(
                     logger.info(f"Category {category}: {len(category_files)} files, Sample: {sample.get('name')} - Risk: {sample.get('riskLevel')} ({sample.get('riskLevelLabel')})")
             
             logger.info("=== END DEBUG ===")
+            
+            # Send notifications if issues found (only on NEW scans, not cached)
+            # Use BackgroundTasks to ensure notification completes even after response
+            background_tasks.add_task(
+                _trigger_notifications,
+                directory_id=folder_id,
+                drive_service=drive_service,
+                scan_results=response
+            )
+            logger.info(f"Scheduled notification task for directory {folder_id}")
             
             return response
         except Exception as e:

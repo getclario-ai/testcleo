@@ -29,20 +29,20 @@ app = FastAPI(
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
 
-# Set CORS middleware - allowing specific origins with credentials
+# Set CORS middleware - using BACKEND_CORS_ORIGINS from config
+cors_origins = settings.BACKEND_CORS_ORIGINS
+# Handle "*" case for development
+if cors_origins == ["*"]:
+    allow_origins = ["*"]
+    allow_credentials = False  # Can't use credentials with wildcard
+else:
+    allow_origins = cors_origins
+    allow_credentials = True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://localhost:8000",
-        "https://127.0.0.1:8000",
-        "https://localhost:3000",
-        "https://127.0.0.1:3000"
-    ],
-    allow_credentials=True,
+    allow_origins=allow_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
     expose_headers=["*"],

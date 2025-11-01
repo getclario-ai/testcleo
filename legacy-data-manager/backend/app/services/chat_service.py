@@ -300,7 +300,8 @@ Try any of these commands!"""
         try:
             logger.info("Fetching files from Google Drive")
             # Get all files
-            files = await self.drive_service.list_files(page_size=1000)
+            files_response = await self.drive_service.list_files(page_size=1000)
+            files = files_response.get('files', [])
             logger.info(f"Retrieved {len(files)} files from Google Drive")
             
             # Calculate statistics
