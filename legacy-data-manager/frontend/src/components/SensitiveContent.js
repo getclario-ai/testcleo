@@ -35,16 +35,7 @@ const SensitiveContent = () => {
   const allSensitiveFiles = React.useMemo(() => {
     if (!stats || !stats.files) return [];
     
-    // Send debug info to backend to see in terminal
-    fetch('http://localhost:8000/api/v1/debug/log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        component: 'SensitiveContent',
-        message: 'Processing stats structure',
-        data: { stats }
-      })
-    }).catch(() => {}); // Ignore errors
+    // Removed debug/log endpoint calls - endpoint has been removed
     
     // Filter only sensitive files (files with sensitiveCategories)
     const sensitiveFiles = stats.files.filter(file => 
@@ -116,26 +107,7 @@ const SensitiveContent = () => {
     const mediumRiskFiles = allSensitiveFiles.filter(f => f.riskLevelLabel === 'medium').length;
     const lowRiskFiles = allSensitiveFiles.filter(f => f.riskLevelLabel === 'low').length;
         
-    // Send debug info to backend to see in terminal
-    fetch('http://localhost:8000/api/v1/debug/log', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        component: 'SensitiveContent',
-        message: 'Risk distribution calculation',
-        data: { 
-          totalFiles, 
-          highRiskFiles, 
-          mediumRiskFiles, 
-          lowRiskFiles,
-          allSensitiveFiles: allSensitiveFiles.map(f => ({
-            name: f.name,
-            riskLevel: f.riskLevel,
-            riskLevelLabel: f.riskLevelLabel
-          }))
-        }
-      })
-    }).catch(() => {}); // Ignore errors
+    // Removed debug/log endpoint calls - endpoint has been removed
     const sensitivityBreakdown = allSensitiveFiles.reduce((acc, file) => {
       // Count the file in ALL categories it belongs to, not just the primary one
       if (file.sensitiveCategories && Array.isArray(file.sensitiveCategories)) {

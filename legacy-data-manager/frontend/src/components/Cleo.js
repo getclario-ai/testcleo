@@ -432,35 +432,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
           <div className="cleo-avatar">Zo</div>
           <div className="cleo-name">Zohra</div>
         </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {isConnected && (
-            <button
-              onClick={async () => {
-                try {
-                  const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/logout`, {
-                    method: 'POST',
-                    credentials: 'include',
-                    headers: { 'Accept': 'application/json' }
-                  });
-                  if (response.ok) {
-                    setIsConnected(false);
-                    localStorage.removeItem('isAuthenticated');
-                    window.location.reload();
-                  }
-                } catch (error) {
-                  console.error('Logout error:', error);
-                  setIsConnected(false);
-                  window.location.reload();
-                }
-              }}
-              className="cleo-logout-button"
-              title="Sign out"
-            >
-              Sign Out
-            </button>
-          )}
-          <button className="cleo-more">⋯</button>
-        </div>
+        <button className="cleo-more">⋯</button>
       </div>
       
       <div className="cleo-content">

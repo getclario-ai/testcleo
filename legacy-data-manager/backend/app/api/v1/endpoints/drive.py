@@ -4,7 +4,6 @@ from ....services.google_drive import GoogleDriveService
 from ....core.config import settings
 import logging
 from datetime import datetime, timezone, timedelta
-from fastapi.responses import RedirectResponse
 import json
 import uuid
 import asyncio
@@ -151,36 +150,53 @@ def initialize_response_structure():
         "failed_files": []
     }
 
+def apply_file_filters(
+    files: List[Dict],
+    age_group: Optional[str] = None,
+    category: Optional[str] = None,
+    risk_level: Optional[str] = None,
+    department: Optional[str] = None
+) -> List[Dict]:
+    """
+    Apply filters to a list of files.
+    Returns filtered list.
+    """
+    filtered_files = files
+    
+    if age_group:
+        filtered_files = [f for f in filtered_files if f.get("ageGroup") == age_group]
+    if category:
+        filtered_files = [f for f in filtered_files if f.get("sensitiveCategories") and category in f.get("sensitiveCategories", [])]
+    if risk_level:
+        filtered_files = [f for f in filtered_files if f.get("riskLevelLabel") == risk_level]
+    if department:
+        filtered_files = [f for f in filtered_files if f.get("department") == department]
+    
+    return filtered_files
+
+def paginate_files(files: List[Dict], page: int = 1, per_page: int = 20) -> Dict:
+    """
+    Paginate a list of files and return paginated result with metadata.
+    Returns dict with files, total, page, per_page, total_pages.
+    """
+    total_files = len(files)
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paginated_files = files[start_idx:end_idx]
+    
+    return {
+        "files": paginated_files,
+        "total": total_files,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total_files + per_page - 1) // per_page
+    }
+
 # --- Router Endpoints ---
-
-@router.get("/auth/url")
-async def get_auth_url_redirect():
-    """Redirect to the new auth URL endpoint."""
-    logger.info("Redirecting old auth URL endpoint to new endpoint")
-    return RedirectResponse(url="/api/v1/auth/google/login")
-
-@router.get("/auth/callback")
-async def auth_callback_redirect(code: str):
-    """Redirect to the new auth callback endpoint."""
-    logger.info("Redirecting old auth callback endpoint to new endpoint")
-    return RedirectResponse(url=f"/api/v1/auth/google/callback?code={code}")
-
-@router.get("/auth/status")
-async def get_auth_status_redirect(drive_service: GoogleDriveService = Depends(get_current_user)):
-    """Check Google Drive authentication status."""
-    try:
-        is_authenticated = await drive_service.is_authenticated()
-        return {
-            "isAuthenticated": is_authenticated,
-            "userType": "cleo",
-            "detail": "Successfully checked authentication status"
-        }
-    except Exception as e:
-        logger.error(f"Error checking auth status: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An internal server error occurred while checking auth status.")
 
 @router.get("/files")
 async def list_files(
+    folder_id: str = None,  # Optional: 'drive' (root) or specific folder_id
     age_group: str = None,
     category: str = None,
     risk_level: str = None,
@@ -190,49 +206,53 @@ async def list_files(
     drive_service: GoogleDriveService = Depends(get_current_user),
     scan_cache: ScanCacheService = Depends(get_scan_cache_service)
 ):
-    """List files from Google Drive with filtering by various criteria."""
+    """
+    List files from Google Drive with filtering by various criteria.
+    
+    Args:
+        folder_id: Optional folder ID. Defaults to 'drive' (root) if not specified.
+                   Can be 'drive' for root or a specific folder ID.
+        age_group: Filter by age group
+        category: Filter by sensitive category
+        risk_level: Filter by risk level
+        department: Filter by department
+        page: Page number (default: 1)
+        per_page: Items per page (default: 20)
+    """
     try:
+        # Default to root drive if folder_id not specified
+        if folder_id is None:
+            folder_id = 'drive'
+        
         # Get cached analysis results
-        cached_result = scan_cache.get_cached_result('drive')
+        cached_result = scan_cache.get_cached_result(folder_id)
         if not cached_result:
-            # 🚀 IMPROVEMENT: Removed redundant drive_service.list_files() call
             # No cache, so fetch, analyze, and cache
-            results = await scan_files(source='gdrive', path_or_drive_id='root')
-            scan_cache.update_cache('drive', results)
+            target_id = 'root' if folder_id == 'drive' else folder_id
+            results = await scan_files(source='gdrive', path_or_drive_id=target_id)
+            scan_cache.update_cache(folder_id, results)
             cached_result = results
 
-        # Apply filters to the files list
-        filtered_files = cached_result.get("files", [])
+        # Get all files from cache
+        all_files = cached_result.get("files", [])
         
-        if age_group:
-            filtered_files = [f for f in filtered_files if f.get("ageGroup") == age_group]
-        if category:
-            filtered_files = [f for f in filtered_files if f.get("sensitiveCategories") and category in f.get("sensitiveCategories", [])]
-        if risk_level:
-            filtered_files = [f for f in filtered_files if f.get("riskLevelLabel") == risk_level]
-        if department:
-            filtered_files = [f for f in filtered_files if f.get("department") == department]
+        # Apply filters using shared helper function
+        filtered_files = apply_file_filters(
+            all_files,
+            age_group=age_group,
+            category=category,
+            risk_level=risk_level,
+            department=department
+        )
         
-        total_files = len(filtered_files)
-        
-        # Calculate pagination
-        start_idx = (page - 1) * per_page
-        end_idx = start_idx + per_page
-        paginated_files = filtered_files[start_idx:end_idx]
-
-        return {
-            "files": paginated_files,
-            "total": total_files,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": (total_files + per_page - 1) // per_page
-        }
+        # Paginate using shared helper function
+        return paginate_files(filtered_files, page=page, per_page=per_page)
 
     except Exception as e:
         logger.error(f"Error listing files: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail="An internal server error occurred while retrieving file data." # ⚠️ IMPROVEMENT: Generic message
+            detail="An internal server error occurred while retrieving file data."
         )
 
 @router.get("/files/inactive")
@@ -273,43 +293,36 @@ async def list_directory_files(
     drive_service: GoogleDriveService = Depends(get_current_user),
     scan_cache: ScanCacheService = Depends(get_scan_cache_service)
 ):
-    """List files in a specific directory with filtering options."""
+    """
+    List files in a specific directory with filtering options.
+    
+    NOTE: This endpoint is now an alias for /files?folder_id={folder_id}
+    Kept for backward compatibility. Consider migrating to /files endpoint.
+    """
     try:
+        # Use the consolidated list_files endpoint internally
+        # This maintains backward compatibility while reducing code duplication
         cached_result = scan_cache.get_cached_result(folder_id)
         if not cached_result:
-            # 🚀 IMPROVEMENT: Only call scanner (removed redundant list_directory call)
             results = await scan_files(source='gdrive', path_or_drive_id=folder_id)
             scan_cache.update_cache(folder_id, results)
             cached_result = results
             
-        # Get all files from the flattened structure
+        # Get all files from cache
         all_files = cached_result.get("files", [])
         
-        # Apply filters (logic remains the same)
-        filtered_files = all_files
+        # Apply filters using shared helper function
+        filtered_files = apply_file_filters(
+            all_files,
+            age_group=age_group,
+            category=category,
+            risk_level=risk_level,
+            department=department
+        )
         
-        if age_group:
-            filtered_files = [f for f in filtered_files if f.get("ageGroup") == age_group]
-        if category:
-            filtered_files = [f for f in filtered_files if f.get("sensitiveCategories") and category in f.get("sensitiveCategories", [])]
-        if risk_level:
-            filtered_files = [f for f in filtered_files if f.get("riskLevelLabel") == risk_level]
-        if department:
-            filtered_files = [f for f in filtered_files if f.get("department") == department]
+        # Paginate using shared helper function
+        return paginate_files(filtered_files, page=page, per_page=per_page)
         
-        # Calculate pagination
-        total_files = len(filtered_files)
-        start_idx = (page - 1) * per_page
-        end_idx = start_idx + per_page
-        paginated_files = filtered_files[start_idx:end_idx]
-        
-        return {
-            "files": paginated_files,
-            "total": total_files,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": (total_files + per_page - 1) // per_page
-        }
     except Exception as e:
         logger.error(f"Error listing directory files: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
@@ -390,24 +403,6 @@ async def analyze_directory(
             detail="An internal server error occurred while analyzing the directory." # ⚠️ IMPROVEMENT: Generic message
         )
 
-@router.get("/directories/{folder_id}/categorize")
-async def categorize_directory(
-    folder_id: str,
-    page_size: int = 100,
-    drive_service: GoogleDriveService = Depends(get_current_user)
-):
-    """Get categorized files in a specific directory."""
-    try:
-        # Assuming categorize_directory is a service method that uses its own logic/cache
-        categories = drive_service.categorize_directory(folder_id, page_size)
-        return {
-            "folder_id": folder_id,
-            "categories": categories
-        }
-    except Exception as e:
-        logger.error(f"Error categorizing directory: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail="An internal server error occurred.")
-
 @router.get("/directories", response_model=List[Dict])
 async def list_directories(
     drive_service: GoogleDriveService = Depends(get_current_user)
@@ -428,18 +423,6 @@ async def list_directories(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
         )
-
-@router.post("/debug/log")
-async def debug_log(request: Request):
-    """Debug endpoint to receive frontend debug messages and log them to terminal"""
-    try:
-        data = await request.json()
-        if 'data' in data:
-            logger.info(f"Frontend Debug: {data['data']}")
-        return {"status": "logged"}
-    except Exception as e:
-        logger.error(f"Error logging debug message: {e}", exc_info=True)
-        return {"status": "error"}
 
 # Department management endpoints
 @router.get("/departments")
@@ -526,26 +509,29 @@ async def list_department_files(
     scan_cache: ScanCacheService = Depends(get_scan_cache_service)
     # NOTE: In a production app, a DB session dependency would be injected here for persistence
 ):
-    """List all files assigned to a specific department."""
+    """
+    List all files assigned to a specific department.
+    
+    Searches across all cached directories (drive-wide and specific folders)
+    and returns files matching the department filter, deduplicated by file ID.
+    """
     try:
-        # 1. 💾 PERSISTENCE FETCH LOGIC HERE (Simulated)
-        # In a persistence-first model, you would query the DB for files assigned to this department.
-        # Since we assume the cache reflects persistence for *currently scanned* files, we use the cache.
-        
+        # Get all cached directories
         cached_dirs = scan_cache.get_cached_directories()
         
+        # Collect files from all caches (drive-wide and specific directories)
         department_files = []
-        
-        # Check all relevant caches: drive-wide and specific directories
         for dir_id in ['drive'] + cached_dirs:
             cached_result = scan_cache.get_cached_result(dir_id)
             if cached_result and "files" in cached_result:
-                department_files.extend([
-                    f for f in cached_result["files"] 
-                    if f.get("department") == department_id
-                ])
+                # Use shared filter function - filter by department only
+                filtered = apply_file_filters(
+                    cached_result["files"],
+                    department=department_id
+                )
+                department_files.extend(filtered)
         
-        # Deduplicate files by ID (crucial as files can appear in both drive-wide and directory scans)
+        # Deduplicate files by ID (files can appear in multiple cached directories)
         unique_files = {}
         for file in department_files:
             if file["id"] not in unique_files:
@@ -553,19 +539,9 @@ async def list_department_files(
         
         department_files = list(unique_files.values())
         
-        # Calculate pagination
-        total_files = len(department_files)
-        start_idx = (page - 1) * per_page
-        end_idx = start_idx + per_page
-        paginated_files = department_files[start_idx:end_idx]
+        # Paginate using shared helper function
+        return paginate_files(department_files, page=page, per_page=per_page)
         
-        return {
-            "files": paginated_files,
-            "total": total_files,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": (total_files + per_page - 1) // per_page
-        }
     except Exception as e:
         logger.error(f"Error listing department files: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred while retrieving department files.")

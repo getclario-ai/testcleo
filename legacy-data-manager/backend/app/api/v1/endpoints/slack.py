@@ -73,12 +73,6 @@ async def verify_slack_signature(request: Request) -> bool:
         logger.error(f"Error verifying Slack signature: {str(e)}", exc_info=True)
         return False
 
-@router.get("/test")
-async def test_endpoint():
-    """Test endpoint to verify the server is working"""
-    logger.debug("Test endpoint called")
-    return {"status": "ok", "message": "Slack endpoint is working"}
-
 @router.post("/events")
 async def handle_slack_events(request: Request, slack_service: SlackService = Depends(get_slack_service)):
     """Handle incoming Slack events"""
