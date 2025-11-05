@@ -75,4 +75,4 @@ async def check_cache(target_id: str):
             "data": cache_entry['data']
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))

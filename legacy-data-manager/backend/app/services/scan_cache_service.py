@@ -4,28 +4,44 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Global per-user cache storage
+# Structure: {user_id: {drive: {...}, directories: {...}}}
+# Key can be int (user_id) or str ("global" for legacy mode)
+_user_cache_storage: Dict[Any, Dict[str, Any]] = {}
+
 class ScanCacheService:
-    _instance = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(ScanCacheService, cls).__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-
-    def __init__(self):
-        if self._initialized:
-            return
-            
-        self.cache = {
-            'drive': {
-                'last_scan': None,
-                'data': None
-            },
-            'directories': {}
-        }
+    def __init__(self, user_id: Optional[int] = None):
+        """
+        Initialize cache service for a specific user.
+        
+        Args:
+            user_id: Optional user ID for multi-user support. If None, uses global cache (legacy mode).
+        """
+        self.user_id = user_id
         self.cache_ttl = timedelta(minutes=60)
-        self._initialized = True
+        
+        # Initialize cache for this user if needed
+        if user_id is not None:
+            if user_id not in _user_cache_storage:
+                _user_cache_storage[user_id] = {
+                    'drive': {
+                        'last_scan': None,
+                        'data': None
+                    },
+                    'directories': {}
+                }
+            self.cache = _user_cache_storage[user_id]
+        else:
+            # Legacy mode: shared cache (for backward compatibility)
+            if 'global' not in _user_cache_storage:
+                _user_cache_storage['global'] = {
+                    'drive': {
+                        'last_scan': None,
+                        'data': None
+                    },
+                    'directories': {}
+                }
+            self.cache = _user_cache_storage['global']
 
     def get_cached_result(self, target_id: str) -> Optional[Dict[str, Any]]:
         """

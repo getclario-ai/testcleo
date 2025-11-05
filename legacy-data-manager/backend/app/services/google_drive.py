@@ -23,13 +23,33 @@ class GoogleDriveService:
     ]
     TOKEN_FILE = 'token.pickle'
 
-    def __init__(self):
+    def __init__(self, user_id: Optional[int] = None):
+        """
+        Initialize GoogleDriveService.
+        
+        Args:
+            user_id: Optional user ID for multi-user support. If None, falls back to file-based token.
+        """
+        self.user_id = user_id
         self.credentials = None
         self.service = None
+        self.refresh_token = None
 
-    async def ensure_service(self):
-        """Ensure the service is built with timeout."""
+    async def ensure_service(self, db_session=None):
+        """
+        Ensure the service is built with timeout.
+        
+        Args:
+            db_session: Optional database session for loading credentials from DB if user_id is set.
+        """
         if not self.service:
+            # If user_id is set but credentials not loaded, load from DB
+            if self.user_id and not self.credentials and db_session:
+                from ..db.models import WebUser
+                user = db_session.query(WebUser).filter(WebUser.id == self.user_id).first()
+                if user and user.google_refresh_token:
+                    self.load_credentials_from_db(db_session, user.google_refresh_token)
+            
             try:
                 async with asyncio.timeout(5):  # 5 second timeout
                     await asyncio.to_thread(self._build_service)
@@ -43,25 +63,38 @@ class GoogleDriveService:
     def _build_service(self):
         """Internal method to build the service."""
         try:
-            credentials = self.load_credentials()
-            if not credentials:
-                raise ValueError("Not authenticated. Please authenticate first.")
+            # Try loading from database first if user_id is set
+            if self.user_id:
+                # Database-backed credentials loaded via ensure_service
+                if not self.credentials:
+                    raise ValueError("Not authenticated. Please authenticate first.")
+            else:
+                # Fallback to file-based credentials
+                credentials = self.load_credentials()
+                if not credentials:
+                    raise ValueError("Not authenticated. Please authenticate first.")
+                self.credentials = credentials
             
             # Validate refresh token exists
-            if not credentials.refresh_token:
+            if not self.credentials.refresh_token:
                 logger.error("Credentials missing refresh token")
                 raise ValueError("Invalid credentials: missing refresh token")
             
             # Check if expired and try to refresh
-            if credentials.expired:
+            if self.credentials.expired:
                 try:
-                    credentials.refresh(Request())
-                    self.save_credentials(credentials)
+                    self.credentials.refresh(Request())
+                    # Save refreshed credentials (file-based or DB-based)
+                    if self.user_id:
+                        # DB-based: refresh token is already stored, just update if needed
+                        pass
+                    else:
+                        self.save_credentials(self.credentials)
                 except Exception as e:
                     logger.error(f"Failed to refresh expired credentials: {e}")
                     raise ValueError("Failed to refresh credentials")
                 
-            self.service = build('drive', 'v3', credentials=credentials)
+            self.service = build('drive', 'v3', credentials=self.credentials)
             return self.service
         except Exception as e:
             logger.error(f"Error building service: {e}")
@@ -70,22 +103,30 @@ class GoogleDriveService:
     async def is_authenticated(self):
         """Check if we have valid credentials."""
         try:
-            credentials = self.load_credentials()
-            
-            if not credentials:
-                return False
+            # Try loading from database first if user_id is set
+            if self.user_id:
+                if not self.credentials:
+                    return False
+            else:
+                # Fallback to file-based credentials
+                credentials = self.load_credentials()
+                if not credentials:
+                    return False
+                self.credentials = credentials
                 
             # Validate refresh token exists
-            if not credentials.refresh_token:
+            if not self.credentials.refresh_token:
                 logger.error("Credentials missing refresh token")
                 return False
                 
             # Check if expired and try to refresh
-            if credentials.expired:
+            if self.credentials.expired:
                 try:
                     async with asyncio.timeout(5):  # 5 second timeout
-                        await asyncio.to_thread(lambda: credentials.refresh(Request()))
-                        await asyncio.to_thread(self.save_credentials, credentials)
+                        await asyncio.to_thread(lambda: self.credentials.refresh(Request()))
+                        # Save refreshed credentials (file-based or DB-based)
+                        if not self.user_id:
+                            await asyncio.to_thread(self.save_credentials, self.credentials)
                 except asyncio.TimeoutError:
                     logger.error("Timeout refreshing credentials")
                     return False
@@ -144,7 +185,10 @@ class GoogleDriveService:
             raise
 
     def load_credentials(self):
-        """Load credentials from token file."""
+        """
+        Load credentials from token file (fallback for single-user mode).
+        For multi-user, use load_credentials_from_db() instead.
+        """
         if not os.path.exists('token.pickle'):
             return None
         
@@ -170,6 +214,47 @@ class GoogleDriveService:
                 return credentials
         except Exception as e:
             logger.error(f"Error loading credentials: {e}")
+            return None
+
+    def load_credentials_from_db(self, db_session, refresh_token: str) -> Optional[Credentials]:
+        """
+        Load credentials from database refresh_token.
+        
+        Args:
+            db_session: SQLAlchemy database session
+            refresh_token: Refresh token from database
+            
+        Returns:
+            Credentials object or None if invalid
+        """
+        if not refresh_token:
+            return None
+        
+        try:
+            # Create Credentials object from refresh_token
+            credentials = Credentials(
+                token=None,  # Will be refreshed when needed
+                refresh_token=refresh_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=settings.GOOGLE_CLIENT_ID,
+                client_secret=settings.GOOGLE_CLIENT_SECRET
+            )
+            
+            # Refresh token if expired
+            if credentials.expired and credentials.refresh_token:
+                try:
+                    credentials.refresh(Request())
+                    # Refresh token doesn't change, but access token is updated
+                except Exception as e:
+                    logger.error(f"Failed to refresh credentials from DB: {e}")
+                    return None
+            
+            self.credentials = credentials
+            self.refresh_token = refresh_token
+            return credentials
+            
+        except Exception as e:
+            logger.error(f"Error loading credentials from DB: {e}")
             return None
 
     def save_credentials(self, credentials):

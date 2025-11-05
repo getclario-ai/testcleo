@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import Auth from './Auth';
+import config from '../config';
 import '../styles/ChatInterface.css';
 
 const ChatInterface = () => {
@@ -51,7 +52,7 @@ const ChatInterface = () => {
       let response;
       switch (baseCommand) {
         case 'directories':
-          response = await fetch('http://localhost:8000/api/v1/drive/directories', { credentials: 'include' });
+          response = await fetch(`${config.apiBaseUrl}/api/v1/drive/directories`, { credentials: 'include' });
           if (!response.ok) {
             const errorText = await response.text();
             addMessage('assistant', `Error fetching directories: ${response.status} ${response.statusText} - ${errorText}`);
@@ -72,7 +73,7 @@ const ChatInterface = () => {
             return;
           }
           // Use original command to preserve case of the directory ID
-          response = await fetch('http://localhost:8000/api/v1/chat/messages', {
+          response = await fetch(`${config.apiBaseUrl}/api/v1/chat/messages`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -131,7 +132,7 @@ const ChatInterface = () => {
             return;
           }
           // Use original command to preserve case of the search query
-          response = await fetch('/api/v1/chat/messages', {
+          response = await fetch(`${config.apiBaseUrl}/api/v1/chat/messages`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -153,7 +154,7 @@ const ChatInterface = () => {
           break;
 
         case 'inactive':
-          response = await fetch('http://localhost:8000/api/v1/drive/files/inactive', { credentials: 'include' });
+          response = await fetch(`${config.apiBaseUrl}/api/v1/drive/files/inactive`, { credentials: 'include' });
           const inactiveData = await response.json();
           if (inactiveData.files && inactiveData.files.length > 0) {
             const inactiveList = inactiveData.files.map(file => 
@@ -166,7 +167,7 @@ const ChatInterface = () => {
           break;
 
         case 'status':
-          response = await fetch('http://localhost:8000/api/v1/drive/auth/status', { credentials: 'include' });
+          response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/status`, { credentials: 'include' });
           if (!response.ok) {
             const errorText = await response.text();
             addMessage('assistant', `Error fetching status: ${response.status} ${response.statusText} - ${errorText}`);

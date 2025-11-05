@@ -98,6 +98,7 @@
   border-radius: 0.75rem;
   font-size: 0.875rem;
   line-height: 1.4;
+  white-space: pre-line; /* Preserve line breaks and wrap text */
 }
 
 .message.assistant .message-content {

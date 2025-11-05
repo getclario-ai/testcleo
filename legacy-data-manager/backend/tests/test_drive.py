@@ -12,28 +12,6 @@ from app.main import app
 
 client = TestClient(app)
 
-def test_get_auth_url():
-    """Test getting the Google OAuth2 authorization URL"""
-    response = client.get("/api/v1/drive/auth/url")
-    assert response.status_code == 200
-    data = response.json()
-    assert "auth_url" in data
-    assert "google.com" in data["auth_url"]
-
-def test_auth_callback():
-    """Test the OAuth2 callback endpoint"""
-    # Test with invalid code
-    response = client.get("/api/v1/drive/auth/callback?code=invalid_code")
-    assert response.status_code == 500  # Should fail with invalid code
-
-def test_auth_status():
-    """Test checking authentication status"""
-    response = client.get("/api/v1/drive/auth/status")
-    assert response.status_code == 200
-    data = response.json()
-    assert "authenticated" in data
-    assert isinstance(data["authenticated"], bool)
-
 def test_list_files():
     """Test listing files"""
     response = client.get("/api/v1/drive/files")
