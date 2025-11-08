@@ -66,6 +66,18 @@ async def _trigger_notifications(
             slack_service = SlackService(chat_service=chat_service, db=db)
             notification_service = NotificationService(slack_service=slack_service)
             
+            # Get user email from drive_service (if user_id is set)
+            user_email = None
+            if hasattr(drive_service, 'user_id') and drive_service.user_id:
+                try:
+                    from ....db.models import WebUser
+                    user = db.query(WebUser).filter(WebUser.id == drive_service.user_id).first()
+                    if user and user.email:
+                        user_email = user.email
+                        logger.info(f"User email for notification: {user_email}")
+                except Exception as e:
+                    logger.warning(f"Could not get user email for notification: {e}")
+            
             # Check if notifications should be sent
             notification_flags = notification_service.should_send_notification(scan_results)
             logger.info(f"Notification flags: {notification_flags}")
@@ -75,7 +87,8 @@ async def _trigger_notifications(
             await notification_service.send_scan_notifications(
                 directory_id=directory_id,
                 directory_name=directory_name,
-                scan_results=scan_results
+                scan_results=scan_results,
+                triggered_by_email=user_email
             )
             logger.info(f"Notification process completed for {directory_name}")
         finally:
@@ -229,7 +242,7 @@ async def list_files(
         if not cached_result:
             # No cache, so fetch, analyze, and cache
             target_id = 'root' if folder_id == 'drive' else folder_id
-            results = await scan_files(source='gdrive', path_or_drive_id=target_id)
+            results = await scan_files(source='gdrive', path_or_drive_id=target_id, drive_service=drive_service)
             scan_cache.update_cache(folder_id, results)
             cached_result = results
 
@@ -304,7 +317,7 @@ async def list_directory_files(
         # This maintains backward compatibility while reducing code duplication
         cached_result = scan_cache.get_cached_result(folder_id)
         if not cached_result:
-            results = await scan_files(source='gdrive', path_or_drive_id=folder_id)
+            results = await scan_files(source='gdrive', path_or_drive_id=folder_id, drive_service=drive_service)
             scan_cache.update_cache(folder_id, results)
             cached_result = results
             
@@ -335,6 +348,10 @@ async def analyze_directory(
     scan_cache: ScanCacheService = Depends(get_scan_cache_service)
 ):
     try:
+        # Log user context for debugging
+        user_id = drive_service.user_id if hasattr(drive_service, 'user_id') else None
+        logger.info(f"Analyze request for directory {folder_id} - user_id={user_id}, cache_user_id={scan_cache.user_id}")
+        
         # Fetch directory metadata to include in response
         directory_metadata = None
         try:
@@ -345,7 +362,7 @@ async def analyze_directory(
         # Check cache first
         cached_result = scan_cache.get_cached_result(folder_id)
         if cached_result:
-            logger.info(f"Using cached result for directory {folder_id}")
+            logger.info(f"Using cached result for directory {folder_id} (user_id={user_id})")
             if directory_metadata:
                 cached_result["directory"] = {
                     "id": folder_id,
@@ -366,7 +383,7 @@ async def analyze_directory(
             
         # Process files using the scanner
         try:
-            response = await scan_files(source='gdrive', path_or_drive_id=folder_id)
+            response = await scan_files(source='gdrive', path_or_drive_id=folder_id, drive_service=drive_service)
             response["scan_complete"] = True
             
             if directory_metadata:
@@ -375,6 +392,7 @@ async def analyze_directory(
                     "name": directory_metadata.get("name", folder_id)
                 }
             
+            logger.info(f"Scan complete for directory {folder_id} (user_id={user_id}), updating cache")
             scan_cache.update_cache(folder_id, response)
             
             # ... (DEBUG logging remains the same) ...

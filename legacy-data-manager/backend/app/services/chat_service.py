@@ -10,7 +10,9 @@ logger = logging.getLogger(__name__)
 class ChatService:
     def __init__(self, drive_service: GoogleDriveService):
         self.drive_service = drive_service
-        self.scan_cache = ScanCacheService()
+        # Use per-user cache if user_id is available, otherwise use global cache (legacy mode)
+        user_id = drive_service.user_id if hasattr(drive_service, 'user_id') and drive_service.user_id else None
+        self.scan_cache = ScanCacheService(user_id=user_id)
         self.commands = {
             "help": self._handle_help,
             "list": self._handle_list,
@@ -356,7 +358,7 @@ Try any of these commands!"""
             files = await self.drive_service.list_directory(directory, recursive=True)
             
             # Process files using the scanner
-            results = await scan_files(source='gdrive', path_or_drive_id=directory)
+            results = await scan_files(source='gdrive', path_or_drive_id=directory, drive_service=self.drive_service)
             
             # Cache the results
             self.scan_cache.update_cache(directory, results)
@@ -411,7 +413,7 @@ Try any of these commands!"""
             logger.info(f"Retrieved {len(files)} files for analysis")
 
             # Process files using the scanner
-            results = await scan_files(source='gdrive', path_or_drive_id=directory if directory else 'drive')
+            results = await scan_files(source='gdrive', path_or_drive_id=directory if directory else 'drive', drive_service=self.drive_service)
             
             # Create a summary of the results
             summary = {
@@ -464,7 +466,7 @@ Try any of these commands!"""
             files = await self.drive_service.list_directory(directory, recursive=True)
             
             # Process files for risk analysis
-            results = await scan_files(source='gdrive', path_or_drive_id=directory)
+            results = await scan_files(source='gdrive', path_or_drive_id=directory, drive_service=self.drive_service)
             
             # Cache the results
             self.scan_cache.update_cache(directory, results)

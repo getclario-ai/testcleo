@@ -256,8 +256,10 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
       // Use directory from response if available (has name), otherwise use what we have
       const responseDirectory = data.directory || {};
       const finalDirectory = responseDirectory.name 
-        ? { id: directory.id, name: responseDirectory.name }
-        : directory;
+        ? { id: responseDirectory.id || directory.id, name: responseDirectory.name }
+        : { id: directory.id, name: directory.name || directory.id };
+      
+      console.log('Cleo: Setting directory in transformedData:', finalDirectory);
       
       // Transform data to match expected structure for the frontend
       const transformedData = {

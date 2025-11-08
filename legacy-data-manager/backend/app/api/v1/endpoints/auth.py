@@ -127,38 +127,45 @@ async def google_callback(
                 url=f"{frontend_url}/?error=auth_failed&message=No refresh token received. Please try again."
             )
         
-        # Get user email from Google (optional)
+        # Get user email from Google (REQUIRED - email is unique identifier)
         email = None
         try:
             service = googleapiclient.discovery.build('oauth2', 'v2', credentials=credentials)
             user_info = service.userinfo().get().execute()
             email = user_info.get('email')
         except Exception as e:
-            logger.warning(f"Could not fetch user email: {e}")
+            logger.error(f"Could not fetch user email: {e}", exc_info=True)
+        
+        if not email:
+            logger.error("No email received from Google - email is required")
+            return RedirectResponse(
+                url=f"{frontend_url}/?error=auth_failed&message=Failed to retrieve email from Google. Please try again."
+            )
         
         # Create or update WebUser in database
-        user = db.query(WebUser).filter(WebUser.session_id == session_id).first()
+        # Lookup by email first (email is the unique identifier)
+        user = db.query(WebUser).filter(WebUser.email == email).first()
         
         session_expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_EXPIRATION_DAYS)
         
         if not user:
-            # Create new user
+            # Create new user (email is unique, so this is a new user)
             user = WebUser(
-                session_id=session_id,
                 email=email,
+                session_id=session_id,
                 google_refresh_token=credentials.refresh_token,
                 last_login_at=datetime.now(timezone.utc),
                 session_expires_at=session_expires_at
             )
             db.add(user)
-            logger.info(f"Created new user with session_id: {session_id}")
+            logger.info(f"Created new user with email: {email}, session_id: {session_id}")
         else:
-            # Update existing user
+            # Update existing user (same email, new session)
+            user.session_id = session_id
             user.google_refresh_token = credentials.refresh_token
-            user.email = email or user.email
             user.last_login_at = datetime.now(timezone.utc)
             user.session_expires_at = session_expires_at
-            logger.info(f"Updated user {user.id} with new credentials")
+            logger.info(f"Updated user {user.id} (email: {email}) with new session {session_id}")
         
         db.commit()
         db.refresh(user)

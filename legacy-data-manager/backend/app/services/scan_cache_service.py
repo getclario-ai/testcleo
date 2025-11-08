@@ -30,6 +30,9 @@ class ScanCacheService:
                     },
                     'directories': {}
                 }
+                logger.info(f"Initialized per-user cache for user_id={user_id}")
+            else:
+                logger.debug(f"Using existing per-user cache for user_id={user_id}")
             self.cache = _user_cache_storage[user_id]
         else:
             # Legacy mode: shared cache (for backward compatibility)
@@ -41,6 +44,9 @@ class ScanCacheService:
                     },
                     'directories': {}
                 }
+                logger.warning("Using global cache (legacy mode) - user_id is None")
+            else:
+                logger.debug("Using existing global cache (legacy mode)")
             self.cache = _user_cache_storage['global']
 
     def get_cached_result(self, target_id: str) -> Optional[Dict[str, Any]]:
@@ -49,20 +55,24 @@ class ScanCacheService:
         Returns None if no cache exists or if cache is expired.
         """
         try:
+            cache_key = f"user_id={self.user_id}" if self.user_id else "global"
+            logger.debug(f"Getting cached result for {target_id} (cache_key={cache_key})")
+            
             if target_id == 'drive':
                 cache_entry = self.cache['drive']
             else:
                 cache_entry = self.cache['directories'].get(target_id)
 
             if not cache_entry or not cache_entry['last_scan']:
+                logger.debug(f"No cache found for {target_id} (cache_key={cache_key})")
                 return None
 
             # Check if cache is expired
             if datetime.utcnow() - cache_entry['last_scan'] > self.cache_ttl:
-                logger.info(f"Cache expired for {target_id}")
+                logger.info(f"Cache expired for {target_id} (cache_key={cache_key})")
                 return None
 
-            logger.info(f"Using cached result for {target_id}")
+            logger.info(f"Using cached result for {target_id} (cache_key={cache_key}, cached_at={cache_entry['last_scan']})")
             return cache_entry['data']
 
         except Exception as e:
@@ -74,6 +84,14 @@ class ScanCacheService:
         Update cache with new scan result.
         """
         try:
+            cache_key = f"user_id={self.user_id}" if self.user_id else "global"
+            logger.info(f"Updating cache for {target_id} (cache_key={cache_key})")
+            
+            # Log existing cached directories for this user
+            existing_dirs = list(self.cache['directories'].keys())
+            if existing_dirs:
+                logger.info(f"Existing cached directories for user_id={self.user_id}: {existing_dirs}")
+            
             if target_id == 'drive':
                 self.cache['drive'] = {
                     'last_scan': datetime.utcnow(),
@@ -84,7 +102,8 @@ class ScanCacheService:
                     'last_scan': datetime.utcnow(),
                     'data': data
                 }
-            logger.info(f"Updated cache for {target_id}")
+            logger.info(f"Updated cache for {target_id} (cache_key={cache_key}, stats={data.get('stats', {})})")
+            logger.info(f"All cached directories after update: {list(self.cache['directories'].keys())}")
         except Exception as e:
             logger.error(f"Error updating cache: {str(e)}", exc_info=True)
 

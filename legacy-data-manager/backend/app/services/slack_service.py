@@ -2,14 +2,16 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from ..core.config import settings
 from .chat_service import ChatService
-from ..db.models import SlackUser
+from ..db.models import SlackUser, WebUser
+from .google_drive import GoogleDriveService
 from sqlalchemy.orm import Session
 import logging
 import json
 import ssl
 import os
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Callable
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -72,123 +74,6 @@ class SlackMessageTemplates:
             ]
         }
 
-    @staticmethod
-    def analyze_message(directory: str, summary: Dict[str, Any], dashboard_url: str) -> Dict:
-        """Create a detailed analysis message for Slack."""
-        # Create the header
-        blocks = [
-            {
-                "type": "header",
-                "text": {"type": "plain_text", "text": f"Analysis Results: {directory} 📊"}
-            }
-        ]
-        
-        # Add cache status if applicable
-        if summary.get('is_cached'):
-            blocks.append({
-                "type": "context",
-                "elements": [
-                    {
-                        "type": "mrkdwn",
-                        "text": "ℹ️ Showing cached results from previous analysis"
-                    }
-                ]
-            })
-        
-        # Add basic statistics
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": 
-                f"*Basic Statistics:*\n" +
-                f"• Total Files: {summary['total_files']}\n" +
-                f"• Sensitive Files: {summary['sensitive_files']}\n" +
-                f"• Old Files (>3y): {summary['old_files']}\n" +
-                f"• Storage Used: {summary['storage_used']}%"
-            }
-        })
-        
-        # Add file type distribution
-        if summary.get('file_types'):
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": 
-                    "*File Type Distribution:*\n" +
-                    "\n".join(f"• {file_type}: {count}" for file_type, count in summary['file_types'].items() if count > 0)
-                }
-            })
-        
-        # Add age distribution
-        if summary.get('age_distribution'):
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": 
-                    "*Age Distribution:*\n" +
-                    "\n".join(f"• {age}: {count}" for age, count in summary['age_distribution'].items() if count > 0)
-                }
-            })
-        
-        # Add risk assessment
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": 
-                f"*Risk Assessment:*\n" +
-                f"• Risk Level: {summary['risk_level']}\n" +
-                f"• Risk Score: {summary['risk_score']}/100"
-            }
-        })
-        
-        # Add key findings
-        blocks.append({
-            "type": "section",
-            "text": {"type": "mrkdwn", "text": 
-                "*Key Findings:*\n" + 
-                "\n".join(f"• {finding}" for finding in summary['key_findings'])
-            }
-        })
-        
-        # Add action button
-        blocks.append({
-            "type": "actions",
-            "elements": [
-                {
-                    "type": "button",
-                    "text": {"type": "plain_text", "text": "View Detailed Analysis"},
-                    "url": dashboard_url
-                }
-            ]
-        })
-        
-        return {"blocks": blocks}
-
-    @staticmethod
-    def summary_message(stats: Dict[str, Any], dashboard_url: str) -> Dict:
-        return {
-            "blocks": [
-                {
-                    "type": "header",
-                    "text": {"type": "plain_text", "text": "Drive Summary 📈"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": 
-                        f"*Total Files:* {stats['total_files']}\n" +
-                        f"*Storage Used:* {stats['storage_used_percentage']}%\n" +
-                        f"*Sensitive Files:* {stats['sensitive_files']}\n" +
-                        f"*Old Files:* {stats['old_files']}"
-                    }
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "Open Dashboard"},
-                            "url": dashboard_url
-                        }
-                    ]
-                }
-            ]
-        }
 
     @staticmethod
     def help_message() -> Dict:
@@ -222,6 +107,9 @@ class SlackService:
         self.templates = SlackMessageTemplates()
         self.dashboard_base_url = settings.FRONTEND_URL
         self._bot_info_cache = None
+        # Cache for Slack user emails: {slack_user_id: (email, cached_at)}
+        self._email_cache: Dict[str, tuple[str, datetime]] = {}
+        self._email_cache_ttl = timedelta(hours=1)  # Cache email for 1 hour
     
     def get_bot_name(self) -> str:
         """
@@ -303,6 +191,120 @@ class SlackService:
             logger.error(f"Error clearing Google Drive tokens: {str(e)}")
             self.db.rollback()
             raise
+    
+    async def get_slack_user_email(self, slack_user_id: str) -> Optional[str]:
+        """Get Slack user's email from Slack API (with caching)"""
+        # Check cache first
+        if slack_user_id in self._email_cache:
+            email, cached_at = self._email_cache[slack_user_id]
+            if datetime.utcnow() - cached_at < self._email_cache_ttl:
+                logger.debug(f"Using cached email for Slack user {slack_user_id}: {email}")
+                return email
+            else:
+                # Cache expired, remove it
+                del self._email_cache[slack_user_id]
+        
+        # Cache miss or expired - fetch from Slack API
+        try:
+            response = self.client.users_info(user=slack_user_id)
+            if response["ok"]:
+                user_info = response["user"]
+                email = user_info.get("profile", {}).get("email")
+                if email:
+                    # Cache the email
+                    self._email_cache[slack_user_id] = (email, datetime.utcnow())
+                    logger.info(f"Retrieved and cached Slack user email for {slack_user_id}: {email}")
+                    return email
+                else:
+                    logger.warning(f"No email found for Slack user {slack_user_id}")
+                    return None
+            else:
+                logger.error(f"Slack API error getting user info: {response.get('error')}")
+                return None
+        except SlackApiError as e:
+            logger.error(f"Slack API error getting user email: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error getting Slack user email: {str(e)}", exc_info=True)
+            return None
+    
+    async def get_user_drive_service(self, slack_user_id: str) -> Optional[GoogleDriveService]:
+        """
+        Get authenticated GoogleDriveService for a Slack user.
+        Returns None if user is not linked or not authenticated.
+        """
+        try:
+            # Get Slack user's email from Slack API
+            slack_email = await self.get_slack_user_email(slack_user_id)
+            if not slack_email:
+                logger.warning(f"Could not get email for Slack user {slack_user_id}")
+                return None
+            
+            # Look up WebUser by email
+            web_user = self.db.query(WebUser).filter(WebUser.email == slack_email).first()
+            if not web_user:
+                logger.warning(f"No WebUser found for email {slack_email} (Slack user {slack_user_id})")
+                return None
+            
+            if not web_user.google_refresh_token:
+                logger.warning(f"WebUser {web_user.email} has no Google Drive credentials")
+                return None
+            
+            # Create GoogleDriveService with user's credentials
+            drive_service = GoogleDriveService(user_id=web_user.id)
+            credentials = drive_service.load_credentials_from_db(self.db, web_user.google_refresh_token)
+            if not credentials:
+                logger.error(f"Failed to load credentials for WebUser {web_user.email}")
+                return None
+            
+            logger.info(f"Created authenticated drive_service for Slack user {slack_user_id} (email: {slack_email}, web_user_id: {web_user.id})")
+            return drive_service
+            
+        except Exception as e:
+            logger.error(f"Error getting user drive_service for Slack user {slack_user_id}: {str(e)}", exc_info=True)
+            return None
+    
+    async def get_user_chat_service(self, slack_user_id: str) -> Optional[ChatService]:
+        """
+        Get user-specific ChatService for a Slack user.
+        Returns None if user is not linked or not authenticated.
+        """
+        drive_service = await self.get_user_drive_service(slack_user_id)
+        if not drive_service:
+            return None
+        return ChatService(drive_service=drive_service)
+    
+    def _get_auth_error_message(self) -> Dict:
+        """Get standard authentication error message"""
+        return {
+            "response_type": "ephemeral",
+            "text": f"❌ Not authenticated. Please link your Slack account to your Google Drive account.\n\nVisit: {self.dashboard_base_url} to authenticate."
+        }
+    
+    async def _with_user_chat_service(
+        self,
+        user_id: str,
+        handler: Callable,
+        args: List[str],
+        channel_id: str
+    ) -> Dict:
+        """
+        Helper method to get user_chat_service and call handler with it.
+        Returns authentication error if user is not authenticated.
+        
+        Args:
+            user_id: Slack user ID
+            handler: Handler function to call with user_chat_service
+            args: Command arguments
+            channel_id: Slack channel ID
+            
+        Returns:
+            Dict response from handler or authentication error
+        """
+        user_chat_service = await self.get_user_chat_service(user_id)
+        if not user_chat_service:
+            return self._get_auth_error_message()
+        return await handler(args, user_id, channel_id, user_chat_service)
         
     async def handle_mention(self, event_data: dict) -> None:
         """Handle app mention events"""
@@ -350,21 +352,30 @@ class SlackService:
             args = parts[1:] if len(parts) > 1 else []
 
             # Command handlers for /zo commands
-            handlers = {
-                "help": self._handle_help,
-                "connect": self._handle_connect,
+            # Handlers that require authentication
+            authenticated_handlers = {
                 "list": self._handle_list,
                 "scan": self._handle_scan
             }
-
-            handler = handlers.get(command)
-            if not handler:
+            
+            # Handlers that don't require authentication
+            unauthenticated_handlers = {
+                "help": self._handle_help,
+                "connect": self._handle_connect
+            }
+            
+            # Check if command requires authentication
+            if command in authenticated_handlers:
+                handler = authenticated_handlers[command]
+                return await self._with_user_chat_service(user_id, handler, args, channel_id)
+            elif command in unauthenticated_handlers:
+                handler = unauthenticated_handlers[command]
+                return await handler(args, user_id, channel_id)
+            else:
                 return {
                     "response_type": "ephemeral",
                     "text": f"Unknown command: {command}. Try `/zo help` for available commands."
                 }
-
-            return await handler(args, user_id, channel_id)
 
         except Exception as e:
             logger.error(f"Error handling slash command: {str(e)}", exc_info=True)
@@ -409,145 +420,11 @@ class SlackService:
             logger.error(f"Error in connect command: {str(e)}", exc_info=True)
             return {"response_type": "ephemeral", "text": f"Error connecting: {str(e)}"}
 
-    async def _handle_analyze(self, args: List[str], user_id: str, channel_id: str) -> Dict:
-        if not args:
-            return {
-                "response_type": "ephemeral",
-                "text": "Please specify a directory to analyze. Usage: `/grbg analyze [directory] [--quick|--deep]`"
-            }
-
-        # Parse directory and flags
-        directory_parts = []
-        flags = []
-        
-        for arg in args:
-            if arg.startswith('--'):
-                flags.append(arg)
-            else:
-                directory_parts.append(arg)
-        
-        if not directory_parts:
-            return {
-                "response_type": "ephemeral",
-                "text": "Please specify a directory to analyze. Usage: `/grbg analyze [directory] [--quick|--deep]`"
-            }
-        
-        directory = " ".join(directory_parts)
-        is_quick = '--quick' in flags
-        is_deep = '--deep' in flags
-        
+    async def _handle_list(self, args: List[str], user_id: str, channel_id: str, user_chat_service: ChatService) -> Dict:
+        """Handle /zo list command - List user's directories"""
         try:
-            if is_quick:
-                # Quick surface scan - return basic stats only
-                stats = await self.chat_service.get_drive_stats()
-                return {
-                    "blocks": [
-                        {
-                            "type": "header",
-                            "text": {"type": "plain_text", "text": f"Quick Analysis: {directory} ⚡"}
-                        },
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": 
-                                f"*Quick Stats:*\n" +
-                                f"• Total Files: {stats.get('total_files', 0)}\n" +
-                                f"• Sensitive Files: {stats.get('sensitive_files', 0)}\n" +
-                                f"• Old Files: {stats.get('old_files', 0)}\n" +
-                                f"• Storage Used: {stats.get('storage_used_percentage', 0)}%"
-                            }
-                        },
-                        {
-                            "type": "actions",
-                            "elements": [
-                                {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": "Run Deep Analysis"},
-                                    "url": f"{self.dashboard_base_url}"
-                                }
-                            ]
-                        }
-                    ]
-                }
-            else:
-                # Full analysis (default or --deep)
-                analysis_results = await self.chat_service.analyze_directory(directory)
-                summary = self._create_analysis_summary(analysis_results)
-                dashboard_url = f"{self.dashboard_base_url}"
-                
-                if is_deep:
-                    # For deep analysis, emphasize dashboard
-                    summary['is_cached'] = False  # Force fresh analysis
-                
-                return self.templates.analyze_message(directory, summary, dashboard_url)
-                
-        except ValueError as e:
-            logger.error(f"Value error in analyze command: {str(e)}")
-            return {
-                "response_type": "ephemeral",
-                "text": f"Error: {str(e)}\nPlease make sure the directory ID is valid and you have access to it."
-            }
-        except Exception as e:
-            error_msg = str(e)
-            if "File not found" in error_msg or "notFound" in error_msg:
-                logger.error(f"Directory not found error: {error_msg}")
-                return {
-                    "response_type": "ephemeral",
-                    "text": f"Error: Directory not found. Please check if the directory ID '{directory}' is correct and you have access to it."
-                }
-            else:
-                logger.error(f"Error in analyze command: {error_msg}", exc_info=True)
-                return {
-                    "response_type": "ephemeral",
-                    "text": f"An error occurred while analyzing the directory. Please try again later or contact support if the issue persists."
-                }
-
-    async def _handle_summary(self, args: List[str], user_id: str, channel_id: str) -> Dict:
-        try:
-            # Parse directory and flags
-            directory_parts = []
-            flags = []
-            
-            for arg in args:
-                if arg.startswith('--'):
-                    flags.append(arg)
-                else:
-                    directory_parts.append(arg)
-            
-            directory = " ".join(directory_parts) if directory_parts else None
-            summary_type = None
-            
-            # Determine summary type based on flags
-            if '--risks' in flags:
-                summary_type = 'risks'
-            elif '--storage' in flags:
-                summary_type = 'storage'
-            elif '--access' in flags:
-                summary_type = 'access'
-            
-            # Get summary statistics
-            stats = await self.chat_service.get_summary_stats(directory)
-            dashboard_url = f"{self.dashboard_base_url}"
-            
-            # Create specialized summary based on type
-            if summary_type == 'risks':
-                return self._create_risks_summary(stats, dashboard_url)
-            elif summary_type == 'storage':
-                return self._create_storage_summary(stats, dashboard_url)
-            elif summary_type == 'access':
-                return self._create_access_summary(stats, dashboard_url)
-            else:
-                # Default summary
-                return self.templates.summary_message(stats, dashboard_url)
-                
-        except Exception as e:
-            logger.error(f"Error in summary command: {str(e)}", exc_info=True)
-            return {"response_type": "ephemeral", "text": f"Error getting summary: {str(e)}"}
-
-    async def _handle_list(self, args: List[str], user_id: str, channel_id: str) -> Dict:
-        try:
-            # For testing: skip Slack user auth, use shared Drive session
             # Use the chat service's list handler
-            response = await self.chat_service._handle_list("")
+            response = await user_chat_service._handle_list("")
             
             # Convert the response to Slack format
             return {
@@ -566,7 +443,7 @@ class SlackService:
             logger.error(f"Error in list command: {str(e)}", exc_info=True)
             return {"response_type": "ephemeral", "text": f"Error listing directories: {str(e)}"}
 
-    async def _handle_scan(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+    async def _handle_scan(self, args: List[str], user_id: str, channel_id: str, user_chat_service: ChatService) -> Dict:
         """Scan a directory and show files by age"""
         if not args:
             return {
@@ -584,13 +461,12 @@ class SlackService:
             # If it looks like a name (not a long ID), try to find the ID
             if len(directory_input) < 20:  # IDs are typically longer
                 try:
-                    # Get list of directories
-                    response = await self.chat_service._handle_list("")
+                    # Get list of directories using user-specific chat_service
+                    response = await user_chat_service._handle_list("")
                     content = response.get("content", "")
                     
                     # Parse the directory list to find matching name
                     # Format is: "- DirectoryName (ID: 1a2b3c4d)"
-                    import re
                     for line in content.split('\n'):
                         match = re.search(rf'- (.+?) \(ID: (.+?)\)', line)
                         if match:
@@ -603,8 +479,8 @@ class SlackService:
                     logger.warning(f"Could not resolve directory name: {e}")
                     # Continue with original input
             
-            # Check cache first for quick response
-            cached_result = self.chat_service.scan_cache.get_cached_result(directory)
+            # Check cache first for quick response (using user-specific cache)
+            cached_result = user_chat_service.scan_cache.get_cached_result(directory)
             
             if cached_result:
                 # We have cached data, return it immediately
@@ -660,7 +536,8 @@ class SlackService:
                     """Run scan in background and cache results"""
                     try:
                         logger.info(f"Background scan starting for: {directory}")
-                        results = await self.chat_service.analyze_directory(directory)
+                        # Use user-specific chat_service for the scan
+                        results = await user_chat_service.analyze_directory(directory)
                         logger.info(f"Background scan completed for: {directory}")
                         # Results are automatically cached by analyze_directory
                         return results
@@ -746,7 +623,7 @@ class SlackService:
             logger.error(f"Error in scan command: {str(e)}", exc_info=True)
             return {"response_type": "ephemeral", "text": f"Error scanning directory: {str(e)}"}
 
-    async def _handle_risks(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+    async def _handle_risks(self, args: List[str], user_id: str, channel_id: str, user_chat_service: ChatService) -> Dict:
         if not args:
             return {
                 "response_type": "ephemeral",
@@ -756,7 +633,7 @@ class SlackService:
         directory = " ".join(args)
         try:
             # Get risk analysis
-            risks = await self.chat_service.analyze_risks(directory)
+            risks = await user_chat_service.analyze_risks(directory)
             
             # Just point to the main dashboard
             dashboard_url = f"{self.dashboard_base_url}"
@@ -787,11 +664,11 @@ class SlackService:
             logger.error(f"Error in risks command: {str(e)}", exc_info=True)
             return {"response_type": "ephemeral", "text": f"Error analyzing risks: {str(e)}"}
 
-    async def _handle_hot(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+    async def _handle_hot(self, args: List[str], user_id: str, channel_id: str, user_chat_service: ChatService) -> Dict:
         """Handle /grbg hot command - Show highest priority items right now"""
         try:
             # Get drive statistics from chat service
-            stats = await self.chat_service.get_drive_stats()
+            stats = await user_chat_service.get_drive_stats()
             
             # Get urgent items (highest priority)
             urgent_items = self._get_urgent_items(stats)
@@ -840,11 +717,11 @@ class SlackService:
             logger.error(f"Error in hot command: {str(e)}", exc_info=True)
             return {"response_type": "ephemeral", "text": f"Error getting hot items: {str(e)}"}
 
-    async def _handle_suggest(self, args: List[str], user_id: str, channel_id: str) -> Dict:
+    async def _handle_suggest(self, args: List[str], user_id: str, channel_id: str, user_chat_service: ChatService) -> Dict:
         """Handle /grbg suggest command - Get AI-powered recommendations"""
         try:
             # Get drive statistics for recommendations
-            stats = await self.chat_service.get_drive_stats()
+            stats = await user_chat_service.get_drive_stats()
             
             # Generate recommendations based on stats
             recommendations = self._generate_recommendations(stats)
@@ -1010,69 +887,6 @@ class SlackService:
         
         return urgent_items
 
-    def _create_analysis_summary(self, results: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a detailed summary from analysis results."""
-        # Basic statistics
-        total_files = results.get('total_files', 0)
-        sensitive_files = results.get('sensitive_files', 0)
-        old_files = results.get('old_files', 0)
-        storage_used = results.get('storage_used', 0)
-        
-        # File type distribution
-        file_types = results.get('file_types', {})
-        file_type_summary = []
-        for file_type, count in file_types.items():
-            if count > 0:
-                percentage = (count / total_files * 100) if total_files > 0 else 0
-                file_type_summary.append(f"{file_type}: {count} ({percentage:.1f}%)")
-        
-        # Age distribution
-        age_distribution = results.get('age_distribution', {})
-        age_summary = []
-        for age, count in age_distribution.items():
-            if count > 0:
-                percentage = (count / total_files * 100) if total_files > 0 else 0
-                age_summary.append(f"{age}: {count} ({percentage:.1f}%)")
-        
-        # Risk assessment
-        risk_level = results.get('risk_level', 'Unknown')
-        risk_score = results.get('risk_score', 0)
-        
-        # Key findings
-        key_findings = []
-        if sensitive_files > 0:
-            key_findings.append(f"🔒 Found {sensitive_files} sensitive files")
-        if old_files > 0:
-            key_findings.append(f"📅 {old_files} files are over 3 years old")
-        if storage_used > 80:
-            key_findings.append(f"⚠️ High storage usage: {storage_used}%")
-        elif storage_used > 60:
-            key_findings.append(f"📊 Moderate storage usage: {storage_used}%")
-        
-        # Add file type insights
-        if file_type_summary:
-            key_findings.append(f"📁 File types: {', '.join(file_type_summary)}")
-        
-        # Add age distribution insights
-        if age_summary:
-            key_findings.append(f"⏳ Age distribution: {', '.join(age_summary)}")
-        
-        # Add risk assessment
-        key_findings.append(f"🚨 Risk level: {risk_level} (Score: {risk_score}/100)")
-        
-        return {
-            'total_files': total_files,
-            'sensitive_files': sensitive_files,
-            'old_files': old_files,
-            'storage_used': storage_used,
-            'file_types': file_types,
-            'age_distribution': age_distribution,
-            'risk_level': risk_level,
-            'risk_score': risk_score,
-            'key_findings': key_findings,
-            'is_cached': results.get('is_cached', False)
-        }
-
     def _format_risks(self, risks: Dict[str, Any]) -> str:
         return (
             f"*Risk Summary:*\n" +
@@ -1124,79 +938,8 @@ class SlackService:
             ]
         }
 
-    def _create_storage_summary(self, stats: Dict[str, Any], dashboard_url: str) -> Dict:
-        """Create a storage-focused summary"""
-        storage_used = stats.get('storage_used_percentage', 0)
-        total_files = stats.get('total_files', 0)
-        
-        storage_status = "Good"
-        if storage_used > 80:
-            storage_status = "Critical"
-        elif storage_used > 60:
-            storage_status = "Warning"
-        
-        return {
-            "blocks": [
-                {
-                    "type": "header",
-                    "text": {"type": "plain_text", "text": "Storage Summary 💾"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": 
-                        f"*Storage Status:* {storage_status}\n" +
-                        f"*Storage Used:* {storage_used}%\n" +
-                        f"*Total Files:* {total_files}"
-                    }
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "View Storage Details"},
-                            "url": dashboard_url
-                        }
-                    ]
-                }
-            ]
-        }
-
-    def _create_access_summary(self, stats: Dict[str, Any], dashboard_url: str) -> Dict:
-        """Create an access patterns summary"""
-        total_files = stats.get('total_files', 0)
-        old_files = stats.get('old_files', 0)
-        
-        # Calculate access patterns (placeholder logic)
-        recent_access = total_files - old_files
-        access_ratio = (recent_access / total_files * 100) if total_files > 0 else 0
-        
-        return {
-            "blocks": [
-                {
-                    "type": "header",
-                    "text": {"type": "plain_text", "text": "Access Patterns Summary 📊"}
-                },
-                {
-                    "type": "section",
-                    "text": {"type": "mrkdwn", "text": 
-                        f"*Recent Access:* {recent_access} files\n" +
-                        f"*Access Ratio:* {access_ratio:.1f}%\n" +
-                        f"*Total Files:* {total_files}"
-                    }
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "View Access Details"},
-                            "url": dashboard_url
-                        }
-                    ]
-                }
-            ]
-        }
+    # NOTE: _handle_risks, _handle_hot, and _handle_suggest are kept for future use
+    # They are not currently registered in the command handler but can be added later
 
     def _generate_recommendations(self, stats: Dict[str, Any]) -> str:
         """Generate AI-powered recommendations based on drive statistics"""

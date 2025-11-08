@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 class GoogleDriveService:
     SCOPES = [
         'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/drive.file'
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/userinfo.email',  # For email retrieval
+        'openid'  # For OpenID Connect (Google automatically adds this)
     ]
     TOKEN_FILE = 'token.pickle'
 
