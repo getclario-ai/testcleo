@@ -62,7 +62,8 @@ class NotificationService:
         self, 
         directory_id: str, 
         directory_name: str, 
-        scan_results: Dict
+        scan_results: Dict,
+        triggered_by_email: Optional[str] = None
     ) -> None:
         """
         Send notifications based on scan results.
@@ -101,7 +102,8 @@ class NotificationService:
                 notifications.append(self._create_old_files_notification(
                     directory_id=directory_id,
                     directory_name=directory_name,
-                    old_files_count=old_files_count
+                    old_files_count=old_files_count,
+                    triggered_by_email=triggered_by_email
                 ))
             
             # Notification 2: Sensitive files
@@ -110,7 +112,9 @@ class NotificationService:
                 notifications.append(self._create_sensitive_files_notification(
                     directory_id=directory_id,
                     directory_name=directory_name,
-                    sensitive_files_count=sensitive_files_count
+                    sensitive_files_count=sensitive_files_count,
+                    scan_results=scan_results,
+                    triggered_by_email=triggered_by_email
                 ))
             
             logger.info(f"Sending {len(notifications)} notification(s) to channel {self.notification_channel}")
@@ -131,13 +135,16 @@ class NotificationService:
         self, 
         directory_id: str, 
         directory_name: str, 
-        old_files_count: int
+        old_files_count: int,
+        triggered_by_email: Optional[str] = None
     ) -> Dict:
         """
         Create notification blocks for old files.
         
         Phase 2: Will add detailed file lists, risk levels, etc.
         """
+        user_info = f"*👤 User:* {triggered_by_email}\n" if triggered_by_email else ""
+        
         return {
             "type": "old_files",
             "blocks": [
@@ -148,6 +155,7 @@ class NotificationService:
                 {
                     "type": "section",
                     "text": {"type": "mrkdwn", "text": 
+                        user_info +
                         f"*Directory:* {directory_name}\n" +
                         f"*Files older than 3 years:* {old_files_count}\n\n" +
                         "These files may contain stale data and should be reviewed."
@@ -170,13 +178,56 @@ class NotificationService:
         self, 
         directory_id: str, 
         directory_name: str, 
-        sensitive_files_count: int
+        sensitive_files_count: int,
+        scan_results: Dict,
+        triggered_by_email: Optional[str] = None
     ) -> Dict:
         """
         Create notification blocks for sensitive files.
         
-        Phase 2: Will add detailed file information, categories, risk levels
+        Includes user info and sensitivity breakdown by category and risk level.
         """
+        stats = scan_results.get('stats', {})
+        
+        # Get sensitivity breakdown by category
+        by_sensitivity = stats.get('by_sensitivity', {})
+        pii_count = by_sensitivity.get('pii', 0)
+        financial_count = by_sensitivity.get('financial', 0)
+        legal_count = by_sensitivity.get('legal', 0)
+        confidential_count = by_sensitivity.get('confidential', 0)
+        
+        # Get risk level breakdown
+        by_risk_level = stats.get('by_risk_level', {})
+        high_risk = by_risk_level.get('high', 0)
+        medium_risk = by_risk_level.get('medium', 0)
+        low_risk = by_risk_level.get('low', 0)
+        
+        # Build sensitivity breakdown text
+        sensitivity_breakdown = []
+        if pii_count > 0:
+            sensitivity_breakdown.append(f"• 🆔 PII: {pii_count}")
+        if financial_count > 0:
+            sensitivity_breakdown.append(f"• 💰 Financial: {financial_count}")
+        if legal_count > 0:
+            sensitivity_breakdown.append(f"• ⚖️ Legal: {legal_count}")
+        if confidential_count > 0:
+            sensitivity_breakdown.append(f"• 🔐 Confidential: {confidential_count}")
+        
+        sensitivity_text = "\n".join(sensitivity_breakdown) if sensitivity_breakdown else "• No category breakdown available"
+        
+        # Build risk level breakdown text
+        risk_breakdown = []
+        if high_risk > 0:
+            risk_breakdown.append(f"• 🔴 High: {high_risk}")
+        if medium_risk > 0:
+            risk_breakdown.append(f"• 🟡 Medium: {medium_risk}")
+        if low_risk > 0:
+            risk_breakdown.append(f"• 🟢 Low: {low_risk}")
+        
+        risk_text = "\n".join(risk_breakdown) if risk_breakdown else "• No risk breakdown available"
+        
+        user_info = f"*👤 User:* {triggered_by_email}\n" if triggered_by_email else ""
+        
         return {
             "type": "sensitive_files",
             "blocks": [
@@ -187,8 +238,13 @@ class NotificationService:
                 {
                     "type": "section",
                     "text": {"type": "mrkdwn", "text": 
+                        user_info +
                         f"*Directory:* {directory_name}\n" +
                         f"*Files with sensitive content:* {sensitive_files_count}\n\n" +
+                        "*Sensitivity Breakdown:*\n" +
+                        sensitivity_text + "\n\n" +
+                        "*Risk Level Breakdown:*\n" +
+                        risk_text + "\n\n" +
                         "These files contain PII, financial data, legal, or confidential information."
                     }
                 },

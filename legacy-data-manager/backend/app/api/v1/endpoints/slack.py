@@ -9,6 +9,7 @@ import logging
 import json
 import hmac
 import hashlib
+import urllib.parse
 from ....core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,14 @@ logger.setLevel(logging.DEBUG)
 router = APIRouter()
 
 def get_slack_service(db: Session = Depends(get_db)) -> SlackService:
+    """
+    Get SlackService instance.
+    Note: This creates a SlackService without a user-specific drive_service.
+    The drive_service will be created per-command based on the Slack user_id.
+    """
     try:
+        # Create a temporary unauthenticated drive_service for initialization
+        # This will be replaced with user-specific drive_service in command handlers
         drive_service = GoogleDriveService()
         chat_service = ChatService(drive_service=drive_service)
         return SlackService(chat_service=chat_service, db=db)
@@ -25,8 +33,18 @@ def get_slack_service(db: Session = Depends(get_db)) -> SlackService:
         logger.error(f"Error initializing Slack service: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error initializing dependent services: {str(e)}")
 
-async def verify_slack_signature(request: Request) -> bool:
-    """Verify that the request came from Slack"""
+async def verify_slack_signature(request: Request, body_str: str = None) -> bool:
+    """
+    Verify that the request came from Slack using HMAC signature.
+    
+    Args:
+        request: FastAPI Request object
+        body_str: Optional pre-read body string. If None, will read from request.
+                  For GET requests, should be query string.
+    
+    Returns:
+        bool: True if signature is valid, False otherwise
+    """
     try:
         # Get Slack signature and timestamp
         slack_signature = request.headers.get("X-Slack-Signature", "")
@@ -39,14 +57,16 @@ async def verify_slack_signature(request: Request) -> bool:
         if not slack_signature or not slack_timestamp:
             logger.error("Missing Slack signature or timestamp")
             return False
-            
-        # Get the raw body
-        body = await request.body()
-        body_str = body.decode('utf-8') if body else ""
         
-        # For GET requests, use query parameters
-        if request.method == "GET":
-            body_str = "&".join(f"{k}={v}" for k, v in sorted(request.query_params.items()))
+        # Use provided body_str or read from request
+        if body_str is None:
+            # For GET requests, use query parameters
+            if request.method == "GET":
+                body_str = "&".join(f"{k}={v}" for k, v in sorted(request.query_params.items()))
+            else:
+                # For POST requests, read body (only if not provided)
+                body = await request.body()
+                body_str = body.decode('utf-8') if body else ""
         
         logger.debug(f"Request body/query string: {body_str}")
         
@@ -96,8 +116,8 @@ async def handle_slack_events(request: Request, slack_service: SlackService = De
             logger.info(f"Handling Slack URL verification challenge. Challenge value: {challenge}")
             return {"challenge": challenge}
             
-        # Verify the request came from Slack
-        if not await verify_slack_signature(request):
+        # Verify the request came from Slack (pass body_str to avoid double-read)
+        if not await verify_slack_signature(request, body_str):
             logger.error("Invalid Slack signature")
             raise HTTPException(status_code=401, detail="Invalid Slack signature")
         
@@ -136,17 +156,21 @@ async def handle_slack_commands(request: Request, slack_service: SlackService = 
         body_str = body.decode('utf-8') if body else ""
         logger.debug(f"Raw request body: {body_str}")
         
+        # For GET requests, construct body_str from query parameters for signature verification
+        if request.method == "GET":
+            body_str = "&".join(f"{k}={v}" for k, v in sorted(request.query_params.items()))
+        
         # Parse the form data
         if request.method == "POST":
-            form_data = await request.form()
-            form_dict = dict(form_data)
+            # Parse form data from body_str (already read)
+            form_dict = dict(urllib.parse.parse_qsl(body_str))
         else:  # GET request
             form_dict = dict(request.query_params)
         
         logger.debug(f"Received {request.method} request with data: {form_dict}")
         
-        # Verify the request came from Slack
-        if not await verify_slack_signature(request):
+        # Verify the request came from Slack (pass body_str to avoid double-read)
+        if not await verify_slack_signature(request, body_str):
             logger.error("Invalid Slack signature")
             # Log the signature verification details
             slack_signature = request.headers.get("X-Slack-Signature", "")

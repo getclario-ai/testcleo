@@ -449,7 +449,7 @@ def extract_text_from_file(stream, file_type):
         return ""
     return ""
 
-async def scan_files(source='local', path_or_drive_id='.', output_json='scan_report.json'):
+async def scan_files(source='local', path_or_drive_id='.', output_json='scan_report.json', drive_service=None):
     # Initialize a simplified, flattened data structure
     results = {
         "files": [],
@@ -512,7 +512,9 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                 results["failed_files"].append(filepath)
 
     elif source == 'gdrive' and HAS_GOOGLE_API:
-        drive_service = GoogleDriveService()
+        # Use provided drive_service if available, otherwise create a new one (for backward compatibility)
+        if drive_service is None:
+            drive_service = GoogleDriveService()
         if not await drive_service.is_authenticated():
             raise ValueError("Not authenticated with Google Drive")
 

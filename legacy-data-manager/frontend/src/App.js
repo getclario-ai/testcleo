@@ -55,10 +55,13 @@ function AppContent() {
   }, [stats]);
 
   // Check for directory parameter in URL (from Slack deep link)
+  // Only run when URL search changes, not when selectedDirectory changes
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const directoryId = urlParams.get('directory');
     
+    // Only process URL parameter if it's different from current selection
+    // This prevents overwriting when user scans from Cleo
     if (directoryId && (!selectedDirectory || selectedDirectory.id !== directoryId)) {
       console.log('Loading directory from URL parameter:', directoryId);
       
@@ -68,11 +71,14 @@ function AppContent() {
       
       // Then fetch directory name and trigger analysis
       const analyzeFromUrl = async () => {
+        // Capture the directoryId at the start of the request to prevent race conditions
+        const requestedDirectoryId = directoryId;
+        
         try {
           // First, get directory metadata to get the name
-          let directoryName = directoryId; // Default to ID if name unavailable
+          let directoryName = requestedDirectoryId; // Default to ID if name unavailable
           try {
-            const metadataResponse = await fetch(`${config.apiBaseUrl}/api/v1/drive/files/${directoryId}`, {
+            const metadataResponse = await fetch(`${config.apiBaseUrl}/api/v1/drive/files/${requestedDirectoryId}`, {
               method: 'GET',
               headers: {
                 'Accept': 'application/json'
@@ -85,7 +91,7 @@ function AppContent() {
               if (metadata.name) {
                 directoryName = metadata.name;
                 // Update selectedDirectory with name immediately
-                setSelectedDirectory({ id: directoryId, name: directoryName });
+                setSelectedDirectory({ id: requestedDirectoryId, name: directoryName });
               }
             }
           } catch (error) {
@@ -93,7 +99,7 @@ function AppContent() {
           }
           
           // Now trigger the analysis
-          const response = await fetch(`${config.apiBaseUrl}/api/v1/drive/directories/${directoryId}/analyze`, {
+          const response = await fetch(`${config.apiBaseUrl}/api/v1/drive/directories/${requestedDirectoryId}/analyze`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -107,11 +113,27 @@ function AppContent() {
             
             // Use directory from response if available (has name), otherwise use what we fetched
             const responseDirectory = data.directory || {};
-            const finalDirectoryName = responseDirectory.name || directoryName || directoryId;
+            const responseDirectoryId = responseDirectory.id || requestedDirectoryId;
+            const finalDirectoryName = responseDirectory.name || directoryName || requestedDirectoryId;
+            
+            // Guard: Only update stats if this response matches the directory we requested
+            // This prevents race conditions where multiple requests complete out of order
+            if (responseDirectoryId !== requestedDirectoryId) {
+              console.log(`Ignoring response for ${responseDirectoryId} - requested ${requestedDirectoryId}`);
+              return;
+            }
+            
+            // Also check if selectedDirectory has changed since we started the request
+            // (to prevent overwriting with stale data if user switched directories)
+            const currentSelectedId = selectedDirectory?.id;
+            if (currentSelectedId && currentSelectedId !== requestedDirectoryId) {
+              console.log(`Ignoring response for ${requestedDirectoryId} - user switched to ${currentSelectedId}`);
+              return;
+            }
             
             // Transform data structure
             const transformedData = {
-              directory: { id: directoryId, name: finalDirectoryName },
+              directory: { id: responseDirectoryId, name: finalDirectoryName },
               docCount: data.stats?.total_documents || 0,
               duplicateDocuments: data.stats?.total_duplicates || 0,
               sensitiveDocuments: data.stats?.total_sensitive || 0,
@@ -126,7 +148,7 @@ function AppContent() {
             
             setStats(transformedData);
             setSelectedDirectory(transformedData.directory);
-            console.log('Auto-loaded directory analysis from URL');
+            console.log(`Auto-loaded directory analysis from URL for ${responseDirectoryId}`);
           }
         } catch (error) {
           console.error('Error loading directory from URL:', error);
@@ -135,7 +157,9 @@ function AppContent() {
       
       analyzeFromUrl();
     }
-  }, [location.search, selectedDirectory]);
+    // Only depend on location.search, not selectedDirectory
+    // This prevents the effect from running when selectedDirectory changes from Cleo scans
+  }, [location.search]);
 
   const handleCleoCommand = (command) => {
     switch (command.name.toLowerCase()) {
@@ -210,7 +234,10 @@ function AppContent() {
     console.log('Received new stats in App.js:', newStats);
     
     if (newStats.directory) {
+      console.log('Updating selectedDirectory to:', newStats.directory);
       setSelectedDirectory(newStats.directory);
+    } else {
+      console.warn('handleStatsUpdate: newStats.directory is missing!', newStats);
     }
     
     setStats(newStats);
