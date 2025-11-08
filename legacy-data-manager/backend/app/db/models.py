@@ -64,4 +64,4 @@ class SlackLinkingAudit(Base):
     web_email = Column(String, nullable=True)  # Email from WebUser
     reason = Column(String, nullable=True)  # Why linking failed (if applicable)
     
-    created_at = Column(DateTime, default=datetime.utcnow) 
+    created_at = Column(DateTime, default=datetime.utcnow)
