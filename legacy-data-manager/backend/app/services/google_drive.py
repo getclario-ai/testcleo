@@ -167,8 +167,7 @@ class GoogleDriveService:
         try:
             await self.ensure_service()
             
-            query = "mimeType='application/vnd.google-apps.folder' and 'me' in owners and 'root' in parents and trashed = false"
-            
+            query = "(mimeType='application/vnd.google-apps.folder' or mimeType='application/vnd.google-apps.shortcut') and 'root' in parents and trashed = false"
             async with asyncio.timeout(10):  # 10 second timeout
                 results = await asyncio.to_thread(
                     lambda: self.service.files().list(
@@ -336,15 +335,20 @@ class GoogleDriveService:
             raise
 
     async def get_file_metadata(self, file_id: str) -> Dict:
-        """Get metadata for a specific file."""
+        """
+        Get metadata for a specific file.
+        Supports both owned and shared files.
+        Note: files().get() doesn't need includeItemsFromAllDrives/supportsAllDrives
+        - these are only for files().list() operations.
+        """
         await self.ensure_service()
         try:
             async with asyncio.timeout(5):  # 5 second timeout
                 result = await asyncio.to_thread(
                     lambda: self.service.files().get(
-            fileId=file_id,
-                        fields="id, name, mimeType, modifiedTime, owners, lastModifyingUser, parents"
-        ).execute()
+                        fileId=file_id,
+                        fields="id, name, mimeType, modifiedTime, owners, lastModifyingUser, parents, shortcutDetails"
+                    ).execute()
                 )
             return result
         except asyncio.TimeoutError:
@@ -352,6 +356,38 @@ class GoogleDriveService:
             raise ValueError(f"Timeout getting file metadata for {file_id}")
         except Exception as e:
             logger.error(f"Error getting file metadata for {file_id}: {e}")
+            raise
+
+    async def resolve_shortcut(self, folder_id: str) -> tuple[str, str]:
+        """
+        Resolve a folder ID, handling shortcuts.
+        
+        Returns:
+            tuple: (actual_folder_id, original_id) where:
+                - actual_folder_id: The target folder ID (or original if not a shortcut)
+                - original_id: The original folder_id passed in
+        
+        If the folder_id is a shortcut, returns the target folder ID.
+        Otherwise, returns the original folder_id.
+        """
+        try:
+            folder_metadata = await self.get_file_metadata(folder_id)
+            mime_type = folder_metadata.get('mimeType', 'unknown')
+            
+            if mime_type == 'application/vnd.google-apps.shortcut':
+                shortcut_details = folder_metadata.get('shortcutDetails')
+                if shortcut_details and shortcut_details.get('targetId'):
+                    target_id = shortcut_details['targetId']
+                    logger.debug(f"resolve_shortcut({folder_id}): Resolved shortcut to target folder ID: {target_id}")
+                    return target_id, folder_id
+                else:
+                    logger.warning(f"resolve_shortcut({folder_id}): Shortcut found but no targetId in shortcutDetails")
+                    raise ValueError(f"Shortcut {folder_id} has no targetId - cannot resolve")
+            else:
+                # Not a shortcut, return original
+                return folder_id, folder_id
+        except Exception as e:
+            logger.error(f"Error resolving shortcut for {folder_id}: {e}")
             raise
 
     def get_inactive_files(self, months_threshold: int = 12) -> List[Dict]:
@@ -379,7 +415,10 @@ class GoogleDriveService:
             raise 
 
     async def list_directory(self, folder_id: str, page_size: int = 100, recursive: bool = False) -> List[Dict]:
-        """List files in a specific directory."""
+        """
+        List files in a specific directory.
+        Supports both owned and shared folders.
+        """
         await self.ensure_service()
         
         if recursive:
@@ -387,16 +426,71 @@ class GoogleDriveService:
         
         query = f"'{folder_id}' in parents and trashed = false"
         try:
+            # First, verify the folder is accessible by getting its metadata
+            # If it's a shortcut, resolve it to the target folder ID
+            actual_folder_id = folder_id
+            try:
+                folder_metadata = await self.get_file_metadata(folder_id)
+                mime_type = folder_metadata.get('mimeType', 'unknown')
+                logger.debug(f"list_directory({folder_id}): Folder accessible, name='{folder_metadata.get('name', 'unknown')}', mimeType='{mime_type}'")
+                
+                # If this is a shortcut, resolve it to the target folder
+                if mime_type == 'application/vnd.google-apps.shortcut':
+                    shortcut_details = folder_metadata.get('shortcutDetails')
+                    if shortcut_details and shortcut_details.get('targetId'):
+                        actual_folder_id = shortcut_details['targetId']
+                        logger.debug(f"list_directory({folder_id}): Resolved shortcut to target folder ID: {actual_folder_id}")
+                    else:
+                        logger.warning(f"list_directory({folder_id}): Shortcut found but no targetId in shortcutDetails")
+                        raise ValueError(f"Shortcut {folder_id} has no targetId - cannot resolve")
+            except Exception as e:
+                logger.warning(f"list_directory({folder_id}): Could not get folder metadata: {e}")
+                if 'Shortcut' in str(e) or 'targetId' in str(e):
+                    raise  # Re-raise shortcut resolution errors
+            
+            # Use the actual folder ID (resolved from shortcut if needed)
+            query = f"'{actual_folder_id}' in parents and trashed = false"
             results = await asyncio.to_thread(
                 lambda: self.service.files().list(
-            q=query,
-            pageSize=page_size,
-            fields="files(id, name, mimeType, modifiedTime, owners, lastModifyingUser, createdTime, size)"
-        ).execute()
+                    q=query,
+                    pageSize=page_size,
+                    fields="files(id, name, mimeType, modifiedTime, owners, lastModifyingUser, createdTime, size, parents)",
+                    includeItemsFromAllDrives=True,  # Required to access shared folders
+                    supportsAllDrives=True,  # Required to access shared folders
+                    corpora="allDrives"  # Include files from all drives (shared drives)
+                ).execute()
             )
-            return results.get('files', [])
+            files = results.get('files', [])
+            logger.debug(f"list_directory({folder_id}->{actual_folder_id}): Found {len(files)} files/folders (query: {query})")
+            if len(files) > 0:
+                logger.debug(f"Sample files: {[f.get('name', 'unknown') for f in files[:3]]}")
+            elif len(files) == 0:
+                # Try alternative query format for shared folders
+                logger.debug(f"list_directory({folder_id}->{actual_folder_id}): Trying alternative query format for shared folders")
+                alt_query = f"parents in '{actual_folder_id}' and trashed = false"
+                try:
+                    alt_results = await asyncio.to_thread(
+                        lambda: self.service.files().list(
+                            q=alt_query,
+                            pageSize=page_size,
+                            fields="files(id, name, mimeType, modifiedTime, owners, lastModifyingUser, createdTime, size, parents)",
+                            includeItemsFromAllDrives=True,
+                            supportsAllDrives=True,
+                            corpora="allDrives"
+                        ).execute()
+                    )
+                    alt_files = alt_results.get('files', [])
+                    logger.debug(f"list_directory({folder_id}->{actual_folder_id}): Alternative query found {len(alt_files)} files/folders")
+                    if len(alt_files) > 0:
+                        return alt_files
+                except Exception as alt_e:
+                    logger.warning(f"list_directory({folder_id}->{actual_folder_id}): Alternative query failed: {alt_e}")
+            return files
         except HttpError as error:
-            logger.error(f"Google Drive API error listing directory {folder_id}: {error}")
+            logger.error(f"Google Drive API error listing directory {folder_id}: {error}", exc_info=True)
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error listing directory {folder_id}: {e}", exc_info=True)
             raise
 
     async def _recursive_list_directory(self, folder_id: str, page_size: int = 100) -> List[Dict]:
@@ -405,29 +499,71 @@ class GoogleDriveService:
         
         # Get files in current directory
         try:
+            logger.debug(f"_recursive_list_directory: Starting scan for folder {folder_id}")
             files = await self.list_directory(folder_id, page_size, recursive=False)
+            logger.debug(f"_recursive_list_directory: Got {len(files)} items from folder {folder_id}")
             
             # Process each file/folder
             for file in files:
-                if file['mimeType'] == 'application/vnd.google-apps.folder':
+                mime_type = file.get('mimeType', '')
+                if mime_type == 'application/vnd.google-apps.folder':
                     # Recursively get files from subdirectory
+                    logger.debug(f"Found subfolder: {file.get('name', 'unknown')} (id: {file.get('id', 'unknown')})")
                     sub_files = await self._recursive_list_directory(file['id'], page_size)
                     all_files.extend(sub_files)
+                elif mime_type == 'application/vnd.google-apps.shortcut':
+                    # Handle shortcuts - resolve and recurse into target
+                    logger.debug(f"Found shortcut: {file.get('name', 'unknown')} (id: {file.get('id', 'unknown')})")
+                    try:
+                        # Get shortcut metadata to resolve target
+                        shortcut_metadata = await self.get_file_metadata(file['id'])
+                        shortcut_details = shortcut_metadata.get('shortcutDetails')
+                        if shortcut_details and shortcut_details.get('targetId'):
+                            target_id = shortcut_details['targetId']
+                            target_mime = shortcut_details.get('targetMimeType', '')
+                            logger.debug(f"Shortcut {file['id']} points to {target_id} (mimeType: {target_mime})")
+                            # Check if target is a folder by getting its metadata
+                            try:
+                                target_metadata = await self.get_file_metadata(target_id)
+                                target_mime_type = target_metadata.get('mimeType', '')
+                                if target_mime_type == 'application/vnd.google-apps.folder':
+                                    # Target is a folder, recurse into it
+                                    sub_files = await self._recursive_list_directory(target_id, page_size)
+                                    all_files.extend(sub_files)
+                                else:
+                                    # Target is a file, add the shortcut (we'll process the target separately if needed)
+                                    all_files.append(file)
+                            except Exception as target_e:
+                                logger.warning(f"Could not get target metadata for shortcut {file['id']} target {target_id}: {target_e}")
+                                all_files.append(file)
+                        else:
+                            logger.warning(f"Shortcut {file['id']} has no targetId - skipping")
+                    except Exception as e:
+                        logger.warning(f"Could not resolve shortcut {file.get('id', 'unknown')}: {e}")
+                        # Add the shortcut itself if we can't resolve it
+                        all_files.append(file)
                 else:
+                    logger.debug(f"Found file: {file.get('name', 'unknown')} (id: {file.get('id', 'unknown')})")
                     all_files.append(file)
             
+            logger.debug(f"_recursive_list_directory: Returning {len(all_files)} total files from folder {folder_id}")
             return all_files
             
         except Exception as e:
-            logger.error(f"Error in recursive directory listing for folder {folder_id}: {e}")
+            logger.error(f"Error in recursive directory listing for folder {folder_id}: {e}", exc_info=True)
             raise
 
     async def get_file_content(self, file_id: str) -> Optional[str]:
-        """Get the content of a file from Google Drive."""
+        """
+        Get the content of a file from Google Drive.
+        Supports both owned and shared files.
+        """
         try:
             await self.ensure_service()
             
             # Get the file metadata first
+            # Note: files().get() doesn't need includeItemsFromAllDrives/supportsAllDrives
+            # - these are only for files().list() operations.
             file_metadata = await asyncio.to_thread(
                 lambda: self.service.files().get(
                     fileId=file_id, 
@@ -578,9 +714,9 @@ class GoogleDriveService:
         
         try:
             # Get all files in the directory
-            logger.info(f"Calling list_directory for folder ID: {folder_id}")
+            logger.debug(f"Calling list_directory for folder ID: {folder_id}")
             files = self.list_directory(folder_id, page_size)
-            logger.info(f"list_directory returned {len(files)} files for folder ID: {folder_id}")
+            logger.debug(f"list_directory returned {len(files)} files for folder ID: {folder_id}")
         except Exception as e:
             logger.error(f"Error occurred during list_directory call within categorize_directory for folder ID {folder_id}: {e}", exc_info=True)
             raise 

@@ -1024,7 +1024,7 @@ class SlackService:
                 channel=channel_id,
                 blocks=blocks
             )
-            logger.info(f"Notification sent successfully to channel {channel_id} (name: {channel})")
+            logger.debug(f"Notification sent successfully to channel {channel_id} (name: {channel})")
             return response
         except SlackApiError as e:
             error_code = e.response.get("error", "unknown") if e.response else "unknown"

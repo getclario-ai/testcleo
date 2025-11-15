@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     SLACK_APP_TOKEN: Optional[str] = None # Optional depending on Slack connection mode
     SLACK_NOTIFICATION_CHANNEL: str = "legacydata" # Channel for scan notifications
     
+    # Debug/Logging Configuration
+    # Can be set via environment variable: DEBUG=True uvicorn ...
+    # Or via LOG_LEVEL environment variable: LOG_LEVEL=DEBUG uvicorn ...
+    DEBUG: bool = False  # Set to True to enable debug logging
+    LOG_LEVEL: Optional[str] = None  # Alternative: LOG_LEVEL=DEBUG (overrides DEBUG if set)
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

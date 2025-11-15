@@ -13,8 +13,11 @@ from ....services.scan_cache_service import ScanCacheService
 from ....services.slack_service import SlackService
 from ....services.chat_service import ChatService
 from ....services.notification_service import NotificationService
+from ....services.user_activity_service import UserActivityService
 from ....db.database import get_db, SessionLocal
+from sqlalchemy.orm import Session
 from asyncio import Lock, TimeoutError
+import time
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -47,7 +50,7 @@ async def _trigger_notifications(
     Called asynchronously so it doesn't block the scan response.
     """
     try:
-        logger.info(f"Triggering notifications for directory {directory_id}")
+        logger.debug(f"Triggering notifications for directory {directory_id}")
         
         # Get directory name for notification
         directory_name = directory_id
@@ -55,7 +58,7 @@ async def _trigger_notifications(
             directory_metadata = await drive_service.get_file_metadata(directory_id)
             if directory_metadata and 'name' in directory_metadata:
                 directory_name = directory_metadata['name']
-                logger.info(f"Directory name for notification: {directory_name}")
+                logger.debug(f"Directory name for notification: {directory_name}")
         except Exception as e:
             logger.warning(f"Could not get directory name for notification: {e}")
         
@@ -74,14 +77,14 @@ async def _trigger_notifications(
                     user = db.query(WebUser).filter(WebUser.id == drive_service.user_id).first()
                     if user and user.email:
                         user_email = user.email
-                        logger.info(f"User email for notification: {user_email}")
+                        logger.debug(f"User email for notification: {user_email}")
                 except Exception as e:
                     logger.warning(f"Could not get user email for notification: {e}")
             
             # Check if notifications should be sent
             notification_flags = notification_service.should_send_notification(scan_results)
-            logger.info(f"Notification flags: {notification_flags}")
-            logger.info(f"Scan stats: {scan_results.get('stats', {})}")
+            logger.debug(f"Notification flags: {notification_flags}")
+            logger.debug(f"Scan stats: {scan_results.get('stats', {})}")
             
             # Send notifications (this is already async, and we're in an async context)
             await notification_service.send_scan_notifications(
@@ -343,14 +346,47 @@ async def list_directory_files(
 @router.post("/directories/{folder_id}/analyze")
 async def analyze_directory(
     folder_id: str,
+    request: Request,
     background_tasks: BackgroundTasks,
     drive_service: GoogleDriveService = Depends(get_current_user),
-    scan_cache: ScanCacheService = Depends(get_scan_cache_service)
+    scan_cache: ScanCacheService = Depends(get_scan_cache_service),
+    db: Session = Depends(get_db)
 ):
+    start_time = time.time()
+    user_id = None
+    user_email = None
+    
     try:
-        # Log user context for debugging
+        # Get user information
         user_id = drive_service.user_id if hasattr(drive_service, 'user_id') else None
+        if user_id:
+            from ....db.models import WebUser
+            user = db.query(WebUser).filter(WebUser.id == user_id).first()
+            user_email = user.email if user else None
+        
+        # Get request context
+        ip_address = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent")
+        
+        # Initialize activity tracking
+        activity_service = UserActivityService(db)
+        
+        # Log user context for debugging
         logger.info(f"Analyze request for directory {folder_id} - user_id={user_id}, cache_user_id={scan_cache.user_id}")
+        
+        # Record scan initiated
+        activity_service.record_activity(
+            event_type="scan_initiated",
+            action="analyze",
+            user_id=user_id,
+            user_email=user_email,
+            resource_type="directory",
+            resource_id=folder_id,
+            source="web",
+            ip_address=ip_address,
+            user_agent=user_agent,
+            metadata={"cache_user_id": scan_cache.user_id}
+        )
         
         # Fetch directory metadata to include in response
         directory_metadata = None
@@ -359,14 +395,57 @@ async def analyze_directory(
         except Exception as e:
             logger.warning(f"Could not fetch directory metadata for {folder_id}: {e}")
         
-        # Check cache first
-        cached_result = scan_cache.get_cached_result(folder_id)
+        # Resolve shortcut to target folder ID (for cache optimization)
+        # This ensures that scanning the same target folder (via shortcut or directly) uses the same cache
+        actual_folder_id = folder_id
+        original_folder_id = folder_id
+        try:
+            actual_folder_id, original_folder_id = await drive_service.resolve_shortcut(folder_id)
+            if actual_folder_id != original_folder_id:
+                logger.debug(f"Resolved shortcut {original_folder_id} to target folder {actual_folder_id}")
+        except Exception as e:
+            logger.warning(f"Could not resolve shortcut for {folder_id}: {e}, using original ID")
+            # Continue with original folder_id if resolution fails
+        
+        # Check cache first - check both the original ID and the resolved ID
+        # This ensures cache hits whether scanning via shortcut or target directly
+        cached_result = scan_cache.get_cached_result(actual_folder_id)
+        if not cached_result and actual_folder_id != original_folder_id:
+            # Also check cache for the shortcut ID (in case it was cached under shortcut ID)
+            cached_result = scan_cache.get_cached_result(original_folder_id)
+        
         if cached_result:
-            logger.info(f"Using cached result for directory {folder_id} (user_id={user_id})")
+            duration_ms = int((time.time() - start_time) * 1000)
+            stats = cached_result.get("stats", {})
+            
+            logger.debug(f"Using cached result for directory {original_folder_id}->{actual_folder_id} (user_id={user_id})")
+            
+            # Record cache hit
+            activity_service.record_activity(
+                event_type="scan_completed",
+                action="analyze",
+                user_id=user_id,
+                user_email=user_email,
+                resource_type="directory",
+                resource_id=original_folder_id,
+                source="web",
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="success",
+                duration_ms=duration_ms,
+                metadata={
+                    "actual_folder_id": actual_folder_id,
+                    "files_scanned": stats.get("total_documents", 0),
+                    "sensitive_files": stats.get("total_sensitive", 0),
+                    "cache_hit": True,
+                    "directory_name": directory_metadata.get("name") if directory_metadata else None
+                }
+            )
+            
             if directory_metadata:
                 cached_result["directory"] = {
-                    "id": folder_id,
-                    "name": directory_metadata.get("name", folder_id)
+                    "id": original_folder_id,  # Return the original ID (shortcut or folder)
+                    "name": directory_metadata.get("name", original_folder_id)
                 }
             return cached_result
 
@@ -382,18 +461,50 @@ async def analyze_directory(
         # ⚠️ REMOVED: Redundant drive_service.list_directory() call is gone.
             
         # Process files using the scanner
+        # Use the actual_folder_id (resolved from shortcut) for scanning
+        # This ensures we scan the actual folder, not the shortcut
         try:
-            response = await scan_files(source='gdrive', path_or_drive_id=folder_id, drive_service=drive_service)
+            response = await scan_files(source='gdrive', path_or_drive_id=actual_folder_id, drive_service=drive_service)
             response["scan_complete"] = True
             
             if directory_metadata:
                 response["directory"] = {
-                    "id": folder_id,
-                    "name": directory_metadata.get("name", folder_id)
+                    "id": original_folder_id,  # Return the original ID (shortcut or folder) in response
+                    "name": directory_metadata.get("name", original_folder_id)
                 }
             
-            logger.info(f"Scan complete for directory {folder_id} (user_id={user_id}), updating cache")
-            scan_cache.update_cache(folder_id, response)
+            duration_ms = int((time.time() - start_time) * 1000)
+            stats = response.get("stats", {})
+            
+            logger.info(f"Scan complete for directory {original_folder_id}->{actual_folder_id} (user_id={user_id}), updating cache")
+            # Cache under BOTH IDs so that scanning either the shortcut or the target directly uses the cache
+            scan_cache.update_cache(actual_folder_id, response)
+            if actual_folder_id != original_folder_id:
+                # Also cache under the shortcut ID for direct shortcut scans
+                scan_cache.update_cache(original_folder_id, response)
+                logger.debug(f"Cached results under both shortcut ID ({original_folder_id}) and target ID ({actual_folder_id})")
+            
+            # Record scan completed
+            activity_service.record_activity(
+                event_type="scan_completed",
+                action="analyze",
+                user_id=user_id,
+                user_email=user_email,
+                resource_type="directory",
+                resource_id=original_folder_id,
+                source="web",
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="success",
+                duration_ms=duration_ms,
+                metadata={
+                    "actual_folder_id": actual_folder_id,
+                    "files_scanned": stats.get("total_documents", 0),
+                    "sensitive_files": stats.get("total_sensitive", 0),
+                    "cache_hit": False,
+                    "directory_name": directory_metadata.get("name") if directory_metadata else None
+                }
+            )
             
             # ... (DEBUG logging remains the same) ...
             
@@ -408,6 +519,29 @@ async def analyze_directory(
             
             return response
         except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            error_message = str(e)
+            
+            # Record scan failed
+            activity_service.record_activity(
+                event_type="scan_failed",
+                action="analyze",
+                user_id=user_id,
+                user_email=user_email,
+                resource_type="directory",
+                resource_id=original_folder_id,
+                source="web",
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="failed",
+                error_message=error_message,
+                duration_ms=duration_ms,
+                metadata={
+                    "actual_folder_id": actual_folder_id,
+                    "error_type": type(e).__name__
+                }
+            )
+            
             logger.error(f"Error scanning files: {e}", exc_info=True)
             raise HTTPException(
                 status_code=500,
@@ -415,6 +549,30 @@ async def analyze_directory(
             )
         
     except Exception as e:
+        duration_ms = int((time.time() - start_time) * 1000) if 'start_time' in locals() else None
+        error_message = str(e)
+        
+        # Record scan failed (outer exception)
+        try:
+            activity_service = UserActivityService(db)
+            activity_service.record_activity(
+                event_type="scan_failed",
+                action="analyze",
+                user_id=user_id if 'user_id' in locals() else None,
+                user_email=user_email if 'user_email' in locals() else None,
+                resource_type="directory",
+                resource_id=folder_id,
+                source="web",
+                ip_address=request.client.host if request.client else None,
+                user_agent=request.headers.get("user-agent"),
+                status="failed",
+                error_message=error_message,
+                duration_ms=duration_ms,
+                metadata={"error_type": type(e).__name__}
+            )
+        except:
+            pass  # Don't let activity tracking break error handling
+        
         logger.error(f"Error analyzing directory: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,

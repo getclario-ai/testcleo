@@ -77,12 +77,12 @@ class NotificationService:
             scan_results: The full scan results dictionary
         """
         try:
-            logger.info(f"NotificationService.send_scan_notifications called for {directory_name} (ID: {directory_id})")
-            logger.info(f"Notification channel: {self.notification_channel}")
+            logger.debug(f"NotificationService.send_scan_notifications called for {directory_name} (ID: {directory_id})")
+            logger.debug(f"Notification channel: {self.notification_channel}")
             
             # Determine what notifications to send
             notification_flags = self.should_send_notification(scan_results)
-            logger.info(f"Notification flags after should_send_notification: {notification_flags}")
+            logger.debug(f"Notification flags after should_send_notification: {notification_flags}")
             
             if not any(notification_flags.values()):
                 logger.info(f"No notifications needed for {directory_name} - flags: {notification_flags}")
@@ -92,13 +92,13 @@ class NotificationService:
             old_files_count = stats.get('by_age_group', {}).get('moreThanThreeYears', 0)
             sensitive_files_count = stats.get('total_sensitive', 0)
             
-            logger.info(f"Stats summary - Old files: {old_files_count}, Sensitive files: {sensitive_files_count}")
+            logger.debug(f"Stats summary - Old files: {old_files_count}, Sensitive files: {sensitive_files_count}")
             
             notifications = []
             
             # Notification 1: Old files (>3 years)
             if notification_flags['old_files']:
-                logger.info(f"Creating old files notification for {old_files_count} files")
+                logger.debug(f"Creating old files notification for {old_files_count} files")
                 notifications.append(self._create_old_files_notification(
                     directory_id=directory_id,
                     directory_name=directory_name,
@@ -108,7 +108,7 @@ class NotificationService:
             
             # Notification 2: Sensitive files
             if notification_flags['sensitive_files']:
-                logger.info(f"Creating sensitive files notification for {sensitive_files_count} files")
+                logger.debug(f"Creating sensitive files notification for {sensitive_files_count} files")
                 notifications.append(self._create_sensitive_files_notification(
                     directory_id=directory_id,
                     directory_name=directory_name,
@@ -117,11 +117,11 @@ class NotificationService:
                     triggered_by_email=triggered_by_email
                 ))
             
-            logger.info(f"Sending {len(notifications)} notification(s) to channel {self.notification_channel}")
+            logger.debug(f"Sending {len(notifications)} notification(s) to channel {self.notification_channel}")
             
             # Send all notifications
             for notification in notifications:
-                logger.info(f"Sending {notification['type']} notification...")
+                logger.debug(f"Sending {notification['type']} notification...")
                 await self.slack_service.send_notification_blocks(
                     channel=self.notification_channel,
                     blocks=notification['blocks']
