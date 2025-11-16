@@ -1,43 +1,22 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import drive, chat, slack, auth, cache, activity
+from app.api.v1.endpoints import drive, chat, slack, auth, cache
 from app.core.config import settings
-from app.core.activity_tracking import ActivityTrackingMiddleware
 from app.db.database import engine, Base
 from app.services.google_drive import GoogleDriveService
 from app.services.chat_service import ChatService
 import logging
 
-# Import all models to ensure they're registered with Base.metadata
-# This must happen BEFORE Base.metadata.create_all()
-from app.db.models import (
-    SlackUser,
-    WebUser,
-    SlackLinkingAudit,
-    UserActivity  # User activity tracking model
-)
-
 # Create database tables (if they don't exist)
-# All models must be imported above for this to work
+# Ensure Base is imported and contains your models (like SlackUser)
 Base.metadata.create_all(bind=engine) # Uncommented to create tables for SQLite
 
-# Configure logging - supports both DEBUG env var and LOG_LEVEL env var
-# Usage: DEBUG=True uvicorn ... OR LOG_LEVEL=DEBUG uvicorn ...
-if settings.LOG_LEVEL:
-    # LOG_LEVEL env var takes precedence (e.g., LOG_LEVEL=DEBUG)
-    log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
-elif settings.DEBUG:
-    log_level = logging.DEBUG
-else:
-    log_level = logging.INFO
-
+# Configure logging
 logging.basicConfig(
-    level=log_level,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-if log_level == logging.DEBUG:
-    logger.info("Debug mode enabled - verbose logging active")
 
 # Initialize services
 drive_service = GoogleDriveService()
@@ -70,16 +49,12 @@ app.add_middleware(
     max_age=3600,
 )
 
-# Add activity tracking middleware (after CORS, before routes)
-app.add_middleware(ActivityTrackingMiddleware)
-
 # Include routers
 app.include_router(drive.router, prefix=settings.API_V1_STR + "/drive", tags=["drive"])
 app.include_router(chat.router, prefix=settings.API_V1_STR + "/chat", tags=["chat"])
 app.include_router(slack.router, prefix=settings.API_V1_STR + "/slack", tags=["slack"])
 app.include_router(auth.router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
 app.include_router(cache.router, prefix=settings.API_V1_STR + "/cache", tags=["cache"])
-app.include_router(activity.router, prefix=settings.API_V1_STR + "/activity", tags=["activity"])
 
 @app.get("/")
 async def root():

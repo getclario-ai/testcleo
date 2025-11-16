@@ -16,11 +16,9 @@ from ....db.database import get_db
 from ....db.models import WebUser
 from ....services.google_drive import GoogleDriveService
 from ....core.session import generate_session_id, get_session_id, set_session_cookie, SESSION_EXPIRATION_DAYS
-from ....services.user_activity_service import UserActivityService
-import time
 
 # Set up logging
-# Logging is configured in main.py
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -150,11 +148,6 @@ async def google_callback(
         
         session_expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_EXPIRATION_DAYS)
         
-        # Get request context for activity tracking
-        ip_address = request.client.host if request.client else None
-        user_agent = request.headers.get("user-agent")
-        activity_service = UserActivityService(db)
-        
         if not user:
             # Create new user (email is unique, so this is a new user)
             user = WebUser(
@@ -165,23 +158,7 @@ async def google_callback(
                 session_expires_at=session_expires_at
             )
             db.add(user)
-            db.flush()  # Flush to get user.id
             logger.info(f"Created new user with email: {email}, session_id: {session_id}")
-            
-            # Record user registration
-            activity_service.record_activity(
-                event_type="user_registered",
-                action="register",
-                user_id=user.id,
-                user_email=email,
-                resource_type="session",
-                resource_id=session_id,
-                source="web",
-                ip_address=ip_address,
-                user_agent=user_agent,
-                status="success",
-                metadata={"session_expires_at": session_expires_at.isoformat()}
-            )
         else:
             # Update existing user (same email, new session)
             user.session_id = session_id
@@ -191,22 +168,6 @@ async def google_callback(
             logger.info(f"Updated user {user.id} (email: {email}) with new session {session_id}")
         
         db.commit()
-        
-        # Record login activity (after commit to ensure user exists)
-        activity_service.record_activity(
-            event_type="auth_login",
-            action="login",
-            user_id=user.id,
-            user_email=email,
-            resource_type="session",
-            resource_id=session_id,
-            source="web",
-            ip_address=ip_address,
-            user_agent=user_agent,
-            status="success",
-            metadata={"session_expires_at": session_expires_at.isoformat()}
-        )
-        
         db.refresh(user)
         
         # Create redirect response
@@ -289,11 +250,6 @@ async def google_logout(
         
         session_id = get_session_id(request)
         
-        # Get request context for activity tracking
-        ip_address = request.client.host if request.client else None
-        user_agent = request.headers.get("user-agent")
-        activity_service = UserActivityService(db)
-        
         if session_id:
             # Invalidate session in database (immediately expire)
             user = db.query(WebUser).filter(WebUser.session_id == session_id).first()
@@ -302,24 +258,6 @@ async def google_logout(
                 user.session_expires_at = datetime.now(timezone.utc)
                 db.commit()
                 logger.info(f"Logged out user {user.id} (email: {user.email}) with session {session_id}")
-                
-                # Invalidate user cache (performance optimization)
-                from ....core.activity_tracking import invalidate_user_cache
-                invalidate_user_cache(session_id)
-                
-                # Record logout activity
-                activity_service.record_activity(
-                    event_type="auth_logout",
-                    action="logout",
-                    user_id=user.id,
-                    user_email=user.email,
-                    resource_type="session",
-                    resource_id=session_id,
-                    source="web",
-                    ip_address=ip_address,
-                    user_agent=user_agent,
-                    status="success"
-                )
             else:
                 logger.warning(f"Logout called for session {session_id} but user not found")
         else:

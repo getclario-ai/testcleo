@@ -1,0 +1,25 @@
+# Backend
+https://legacy-data-api-614240891036.us-central1.run.app
+
+# Build and deploy Backend Step 1: Navigate to backend directory
+cd /Users/madhuvohra/Madhu/clario/development/legacy-data-manager/backend
+
+# Step 2: Build and push the Docker image to Artifact Registry
+# This will take a few minutes
+gcloud builds submit --tag us-central1-docker.pkg.dev/clario-stage-1/cloud-run-source-deploy/legacy-data-api:latest .
+
+# Step 3: Deploy the new image to Cloud Run
+# This will create a new revision with the updated code
+gcloud run deploy legacy-data-api \
+  --image us-central1-docker.pkg.dev/clario-stage-1/cloud-run-source-deploy/legacy-data-api:latest \
+  --region us-central1 \
+  --platform managed \
+  --allow-unauthenticated
+
+# Step 4: Verify the deployment
+gcloud run services describe legacy-data-api --region=us-central1 --format="value(status.url)"
+
+
+# ######
+#FRONTEND ######
+https://legacy-data-frontend-614240891036.us-central1.run.app

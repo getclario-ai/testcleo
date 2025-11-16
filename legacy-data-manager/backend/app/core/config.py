@@ -30,7 +30,8 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://testcleo.netlify.app",
-        "https://www.testcleo.netlify.app"  # Netlify can serve both www and non-www
+        "https://www.testcleo.netlify.app",  # Netlify can serve both www and non-www
+        "https://legacy-data-frontend-614240891036.us-central1.run.app"  # Cloud Run frontend
     ]
     
     @field_validator('BACKEND_CORS_ORIGINS', mode='before')
@@ -61,12 +62,6 @@ class Settings(BaseSettings):
     SLACK_BOT_TOKEN: str
     SLACK_APP_TOKEN: Optional[str] = None # Optional depending on Slack connection mode
     SLACK_NOTIFICATION_CHANNEL: str = "legacydata" # Channel for scan notifications
-    
-    # Debug/Logging Configuration
-    # Can be set via environment variable: DEBUG=True uvicorn ...
-    # Or via LOG_LEVEL environment variable: LOG_LEVEL=DEBUG uvicorn ...
-    DEBUG: bool = False  # Set to True to enable debug logging
-    LOG_LEVEL: Optional[str] = None  # Alternative: LOG_LEVEL=DEBUG (overrides DEBUG if set)
     
     class Config:
         env_file = ".env"
