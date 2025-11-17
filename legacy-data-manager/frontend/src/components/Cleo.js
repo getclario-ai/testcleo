@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import config from '../config';
 import '../styles/Cleo.css';
 
 const cleoCommands = [
   { name: 'List Directories', description: 'Show available directories' },
   { name: 'Analyze', description: 'Analyze selected directory' },
-  { name: 'Clean', description: 'Clean up selected directory' },
-  { name: 'Audit Trail', description: 'View audit trail' }
+  { name: 'Clean', description: 'Clean up selected directory' }
 ];
 
 const analysisOptions = [
@@ -34,7 +33,6 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
   const [showAnalysisOptions, setShowAnalysisOptions] = useState(false);
   
   const location = useLocation();
-  const navigate = useNavigate();
 
   console.log('Cleo component state:', {
     isConnected,
@@ -354,9 +352,6 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
           }]);
         }
         break;
-      case 'audit trail':
-        navigate('/audit-trail');
-        break;
       default:
         console.warn('Unknown command:', cmd.name);
     }
@@ -447,27 +442,11 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
           {messages.map((msg, index) => (
             <div key={index} className={`message ${msg.type}`}>
               {msg.type === 'assistant' && (
-                <div className="message-avatar">Zo</div>
+                <div className="message-avatar">K</div>
               )}
               <div className="message-content">{msg.content}</div>
             </div>
           ))}
-          
-          {/* Action buttons in chat view (like Amazon Rufus) */}
-          {isConnected && (
-            <div className="chat-action-buttons">
-              {cleoCommands.map((cmd) => (
-                <button
-                  key={cmd.name}
-                  className="chat-action-button"
-                  onClick={() => handleCommand({ name: cmd.name })}
-                  disabled={isLoading}
-                >
-                  {cmd.name}
-                </button>
-              ))}
-            </div>
-          )}
         </div>
 
         {!isConnected ? (
@@ -478,6 +457,18 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
           </div>
         ) : (
           <>
+            <div className="command-buttons">
+              {cleoCommands.map((cmd) => (
+                <button
+                  key={cmd.name}
+                  className="command-button"
+                  onClick={() => handleCommand({ name: cmd.name })}
+                  disabled={isLoading}
+                >
+                  {cmd.name}
+                </button>
+              ))}
+            </div>
 
             {showDirectorySelection && (
               <div className="directory-selection">

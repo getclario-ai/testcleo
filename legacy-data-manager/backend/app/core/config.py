@@ -30,8 +30,7 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "https://testcleo.netlify.app",
-        "https://www.testcleo.netlify.app",  # Netlify can serve both www and non-www
-        "https://legacy-data-frontend-614240891036.us-central1.run.app"  # Cloud Run frontend
+        "https://www.testcleo.netlify.app"  # Netlify can serve both www and non-www
     ]
     
     @field_validator('BACKEND_CORS_ORIGINS', mode='before')

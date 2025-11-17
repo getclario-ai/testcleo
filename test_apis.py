@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-API Testing Script for Legacy Data Manager
+API Testing Script for Clario
 Tests the basic API endpoints to ensure they're working correctly
 """
 
@@ -34,7 +34,7 @@ def test_endpoint(method, endpoint, description, data=None, headers=None):
         return False, f"Error: {str(e)}"
 
 def main():
-    print("🧪 Testing Legacy Data Manager APIs")
+    print("🧪 Testing Clario APIs")
     print("=" * 50)
     
     # Test cases

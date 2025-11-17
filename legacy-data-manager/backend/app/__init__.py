@@ -1,3 +1,3 @@
 """
-Legacy Data Manager Application
+Clario Application
 """ 
