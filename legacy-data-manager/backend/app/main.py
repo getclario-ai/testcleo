@@ -1,7 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1.endpoints import drive, chat, slack, auth, cache
+from app.api.v1.endpoints import drive, chat, slack, auth, cache, activity
 from app.core.config import settings
+from app.core.activity_tracking import ActivityTrackingMiddleware
 from app.db.database import engine, Base
 from app.services.google_drive import GoogleDriveService
 from app.services.chat_service import ChatService
@@ -49,12 +50,16 @@ app.add_middleware(
     max_age=3600,
 )
 
+# Add activity tracking middleware (after CORS)
+app.add_middleware(ActivityTrackingMiddleware)
+
 # Include routers
 app.include_router(drive.router, prefix=settings.API_V1_STR + "/drive", tags=["drive"])
 app.include_router(chat.router, prefix=settings.API_V1_STR + "/chat", tags=["chat"])
 app.include_router(slack.router, prefix=settings.API_V1_STR + "/slack", tags=["slack"])
 app.include_router(auth.router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
 app.include_router(cache.router, prefix=settings.API_V1_STR + "/cache", tags=["cache"])
+app.include_router(activity.router, prefix=settings.API_V1_STR, tags=["activity"])
 
 @app.get("/")
 async def root():

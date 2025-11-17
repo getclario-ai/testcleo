@@ -7,6 +7,7 @@ import FileInsightsDashboard from './components/FileInsightsDashboard';
 import RiskCategoryInsightsDashboard from './components/RiskCategoryInsightsDashboard';
 import ReviewSensitiveFiles from './components/ReviewSensitiveFiles';
 import DepartmentDashboard from './components/DepartmentDashboard';
+import AuditTrailDashboard from './components/AuditTrailDashboard';
 import FileTypeChart from './components/FileTypeChart';
 import RiskCategoryChart from './components/RiskCategoryChart';
 import { getFileTypeColor, getRiskCategoryColor } from './constants/colors';
@@ -580,6 +581,7 @@ function AppContent() {
       <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
       <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />
       <Route path="/department/:departmentSlug" element={<DepartmentDashboard />} />
+      <Route path="/audit-trail" element={<AuditTrailDashboard />} />
       <Route
         path="/"
         element={
@@ -738,6 +740,7 @@ function App() {
         <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
         <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />
         <Route path="/department/:departmentSlug" element={<DepartmentDashboard />} />
+        <Route path="/audit-trail" element={<AuditTrailDashboard />} />
         <Route
           path="/"
           element={<AppContent />}
