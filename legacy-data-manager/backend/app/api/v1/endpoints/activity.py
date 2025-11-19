@@ -18,11 +18,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/activity", tags=["activity"])
 
+# TODO: Add rate limiting middleware - target: 500 requests per minute per IP
+# This prevents DoS attacks and data exfiltration attempts
+# Consider using slowapi or similar rate limiting library
+
 
 @router.get("/")
 async def get_activities(
-    event_type: Optional[str] = None,
-    user_email: Optional[str] = None,
+    # Input validation: event_type max 50 chars, alphanumeric + underscore only
+    event_type: Optional[str] = Query(None, max_length=50, regex="^[a-z0-9_]+$"),
+    # Input validation: user_email max 255 chars, basic email format
+    user_email: Optional[str] = Query(None, max_length=255, regex="^[^@]+@[^@]+\\.[^@]+$"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     days: int = Query(30, ge=1, le=365),

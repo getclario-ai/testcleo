@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import config from '../config';
+import logger from '../utils/logger';
 import './AuditTrailDashboard.css';
 
 // User-friendly event type labels
@@ -137,7 +138,7 @@ const AuditTrailDashboard = () => {
             retries--;
           } else {
             // Final attempt failed - use fallback
-            console.warn(`Could not fetch name for ${resourceId}:`, err.message);
+            logger.warn(`Could not fetch name for ${resourceId}:`, err.message);
             names[resourceId] = `${resourceType}: ${resourceId.substring(0, 12)}...`;
             success = true;
           }
@@ -168,7 +169,7 @@ const AuditTrailDashboard = () => {
           setStats(data);
         }
       } catch (err) {
-        console.error('Error fetching stats:', err);
+        logger.error('Error fetching stats:', err);
       }
     };
     
@@ -195,7 +196,7 @@ const AuditTrailDashboard = () => {
           setUsers(data);
         }
       } catch (err) {
-        console.error('Error fetching users:', err);
+        logger.error('Error fetching users:', err);
       }
     };
     

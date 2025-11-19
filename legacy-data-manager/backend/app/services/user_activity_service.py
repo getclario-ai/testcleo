@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ..db.models import UserActivity, WebUser
 from datetime import datetime
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,10 @@ class UserActivityService:
             if metadata:
                 activity.set_metadata(metadata)
             
+            # Sanitize error message to prevent information leakage
+            if activity.error_message:
+                activity.error_message = self._sanitize_error_message(activity.error_message)
+            
             self.db.add(activity)
             self.db.commit()
             self.db.refresh(activity)
@@ -98,6 +103,34 @@ class UserActivityService:
             self.db.rollback()
             # Don't raise - activity tracking shouldn't break the main flow
             return None
+    
+    def _sanitize_error_message(self, error_msg: str) -> str:
+        """
+        Sanitize error messages to prevent information leakage.
+        Removes file paths, stack traces, and other sensitive information.
+        
+        Args:
+            error_msg: Raw error message
+            
+        Returns:
+            Sanitized error message (max 200 chars, first line only)
+        """
+        if not error_msg:
+            return error_msg
+        
+        # Take only the first line (before any newlines)
+        sanitized = error_msg.split('\n')[0]
+        
+        # Remove common sensitive patterns
+        # Remove file paths (e.g., /path/to/file.py:123)
+        sanitized = re.sub(r'/[^\s]+\.(py|js|ts|json|yaml|yml):\d+', '[file]', sanitized)
+        # Remove stack trace indicators
+        sanitized = re.sub(r'Traceback \(most recent call last\)', '[traceback]', sanitized)
+        # Remove absolute paths
+        sanitized = re.sub(r'/[a-zA-Z0-9_/]+', '[path]', sanitized)
+        
+        # Limit length to prevent DoS
+        return sanitized[:200]
     
     def get_user_activities(
         self,

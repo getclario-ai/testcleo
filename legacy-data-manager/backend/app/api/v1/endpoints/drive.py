@@ -491,6 +491,7 @@ async def analyze_directory(
             # Track scan failed using same DB session
             duration_ms = int((time.time() - scan_start_time) * 1000)
             try:
+                # Error message will be sanitized in record_activity
                 activity_service.record_activity(
                     event_type="scan_completed",
                     action="analyze",
@@ -503,7 +504,7 @@ async def analyze_directory(
                     user_agent=user_agent,
                     status="failed",
                     duration_ms=duration_ms,
-                    error_message=str(e)
+                    error_message=str(e)  # Will be sanitized in UserActivityService
                 )
             except Exception as e2:
                 logger.error(f"Error recording scan failure: {e2}", exc_info=True)
@@ -521,6 +522,7 @@ async def analyze_directory(
         # Track scan error using same DB session
         duration_ms = int((time.time() - scan_start_time) * 1000)
         try:
+            # Error message will be sanitized in record_activity
             activity_service.record_activity(
                 event_type="scan_completed",
                 action="analyze",
@@ -533,7 +535,7 @@ async def analyze_directory(
                 user_agent=user_agent,
                 status="error",
                 duration_ms=duration_ms,
-                error_message=str(e)
+                error_message=str(e)  # Will be sanitized in UserActivityService
             )
         except Exception as e2:
             logger.error(f"Error recording scan error: {e2}", exc_info=True)

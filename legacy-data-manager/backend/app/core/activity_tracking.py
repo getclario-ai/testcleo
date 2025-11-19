@@ -144,7 +144,7 @@ def get_event_type_from_route(method: str, path: str) -> Tuple[Optional[str], Op
     
     # Directory/Drive events
     elif normalized_path.endswith('/directories') and method == 'GET':
-        return ('directories_listed', 'list')
+        return (None, None)  # Manual tracking in endpoint (exclude from middleware)
     elif '/directories/' in normalized_path and '/analyze' in normalized_path:
         return (None, None)  # Manual tracking in endpoint
     elif '/directories/' in normalized_path and '/files' in normalized_path:
