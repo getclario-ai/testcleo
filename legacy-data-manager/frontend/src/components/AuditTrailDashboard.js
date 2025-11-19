@@ -81,35 +81,67 @@ const AuditTrailDashboard = () => {
   // Fetch resource names from Google Drive
   const fetchResourceNames = async (activities) => {
     const names = {};
+    // Map resource IDs to their types for fallback display
+    const resourceTypeMap = {};
     const uniqueResources = new Set();
     
-    // Collect unique resource IDs
+    // Collect unique resource IDs and their types
     activities.forEach(activity => {
       if (activity.resource_id && (activity.resource_type === 'directory' || activity.resource_type === 'file')) {
         uniqueResources.add(activity.resource_id);
+        resourceTypeMap[activity.resource_id] = activity.resource_type;
       }
     });
     
-    // Fetch names for each resource
+    // Fetch names for each resource with error handling and retry logic
     for (const resourceId of uniqueResources) {
-      try {
-        const response = await fetch(
-          `${config.apiBaseUrl}/api/v1/drive/files/${resourceId}`,
-          {
-            method: 'GET',
-            credentials: 'include',
-            headers: {
-              'Accept': 'application/json',
+      let retries = 2; // Retry up to 2 times
+      let success = false;
+      const resourceType = resourceTypeMap[resourceId] || 'Resource';
+      
+      while (retries > 0 && !success) {
+        try {
+          const response = await fetch(
+            `${config.apiBaseUrl}/api/v1/drive/files/${resourceId}`,
+            {
+              method: 'GET',
+              credentials: 'include',
+              headers: {
+                'Accept': 'application/json',
+              }
             }
+          );
+          
+          if (response.ok) {
+            const data = await response.json();
+            names[resourceId] = data.name || resourceId;
+            success = true;
+          } else if (response.status === 404) {
+            // Resource not found - use fallback
+            names[resourceId] = `${resourceType}: ${resourceId.substring(0, 12)}...`;
+            success = true; // Don't retry for 404
+          } else if (response.status >= 500 && retries > 1) {
+            // Server error - retry after a short delay
+            await new Promise(resolve => setTimeout(resolve, 500));
+            retries--;
+          } else {
+            // Other client errors - use fallback
+            names[resourceId] = `${resourceType}: ${resourceId.substring(0, 12)}...`;
+            success = true;
           }
-        );
-        
-        if (response.ok) {
-          const data = await response.json();
-          names[resourceId] = data.name || resourceId;
+        } catch (err) {
+          // Network error or other exception
+          if (retries > 1) {
+            // Retry after a short delay
+            await new Promise(resolve => setTimeout(resolve, 500));
+            retries--;
+          } else {
+            // Final attempt failed - use fallback
+            console.warn(`Could not fetch name for ${resourceId}:`, err.message);
+            names[resourceId] = `${resourceType}: ${resourceId.substring(0, 12)}...`;
+            success = true;
+          }
         }
-      } catch (err) {
-        console.log(`Could not fetch name for ${resourceId}`);
       }
     }
     

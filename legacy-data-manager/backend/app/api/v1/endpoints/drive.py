@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request, Depends, status, BackgroundTasks
 from typing import Dict, List, Optional
+from sqlalchemy.orm import Session
 from ....services.google_drive import GoogleDriveService
 from ....core.config import settings
 import logging
@@ -350,21 +351,19 @@ async def analyze_directory(
     background_tasks: BackgroundTasks,
     request: Request,
     drive_service: GoogleDriveService = Depends(get_current_user),
-    scan_cache: ScanCacheService = Depends(get_scan_cache_service)
+    scan_cache: ScanCacheService = Depends(get_scan_cache_service),
+    db: Session = Depends(get_db)  # Single DB session for entire endpoint
 ):
-    # Extract user info for activity tracking
+    # Extract user info for activity tracking using single DB session
     user_id = drive_service.user_id if hasattr(drive_service, 'user_id') else None
     user_email = None
     if user_id:
-        db = SessionLocal()
         try:
             user = db.query(WebUser).filter(WebUser.id == user_id).first()
             if user:
                 user_email = user.email
         except Exception as e:
             logger.debug(f"Could not get user email: {e}")
-        finally:
-            db.close()
     
     # Extract request metadata
     ip_address = request.client.host if request.client else None
@@ -381,11 +380,10 @@ async def analyze_directory(
     except Exception as e:
         logger.warning(f"Could not fetch directory metadata for {folder_id}: {e}")
     
-    # Track scan initiated
+    # Track scan initiated using same DB session
     scan_start_time = time.time()
-    db = SessionLocal()
+    activity_service = UserActivityService(db)
     try:
-        activity_service = UserActivityService(db)
         metadata = {
             "directory_name": directory_name
         }
@@ -405,8 +403,6 @@ async def analyze_directory(
         )
     except Exception as e:
         logger.error(f"Error recording scan_initiated: {e}", exc_info=True)
-    finally:
-        db.close()
     
     try:
         # Log user context for debugging
@@ -451,10 +447,8 @@ async def analyze_directory(
             # Calculate duration
             duration_ms = int((time.time() - scan_start_time) * 1000)
             
-            # Track scan completed with metadata
-            db = SessionLocal()
+            # Track scan completed with metadata using same DB session
             try:
-                activity_service = UserActivityService(db)
                 stats = response.get("stats", {})
                 metadata = {
                     "file_count": stats.get("total_documents", 0),
@@ -478,8 +472,6 @@ async def analyze_directory(
                 )
             except Exception as e:
                 logger.error(f"Error recording scan_completed: {e}", exc_info=True)
-            finally:
-                db.close()
             
             # ... (DEBUG logging remains the same) ...
             
@@ -496,11 +488,9 @@ async def analyze_directory(
         except Exception as e:
             logger.error(f"Error scanning files: {e}", exc_info=True)
             
-            # Track scan failed
+            # Track scan failed using same DB session
             duration_ms = int((time.time() - scan_start_time) * 1000)
-            db = SessionLocal()
             try:
-                activity_service = UserActivityService(db)
                 activity_service.record_activity(
                     event_type="scan_completed",
                     action="analyze",
@@ -517,8 +507,6 @@ async def analyze_directory(
                 )
             except Exception as e2:
                 logger.error(f"Error recording scan failure: {e2}", exc_info=True)
-            finally:
-                db.close()
             
             raise HTTPException(
                 status_code=500,
@@ -530,11 +518,9 @@ async def analyze_directory(
     except Exception as e:
         logger.error(f"Error analyzing directory: {e}", exc_info=True)
         
-        # Track scan error
+        # Track scan error using same DB session
         duration_ms = int((time.time() - scan_start_time) * 1000)
-        db = SessionLocal()
         try:
-            activity_service = UserActivityService(db)
             activity_service.record_activity(
                 event_type="scan_completed",
                 action="analyze",
@@ -551,8 +537,6 @@ async def analyze_directory(
             )
         except Exception as e2:
             logger.error(f"Error recording scan error: {e2}", exc_info=True)
-        finally:
-            db.close()
         
         raise HTTPException(
             status_code=500,
@@ -562,22 +546,20 @@ async def analyze_directory(
 @router.get("/directories", response_model=List[Dict])
 async def list_directories(
     request: Request,
-    drive_service: GoogleDriveService = Depends(get_current_user)
+    drive_service: GoogleDriveService = Depends(get_current_user),
+    db: Session = Depends(get_db)  # Single DB session for entire endpoint
 ) -> List[Dict]:
     """List all directories in the user's drive."""
-    # Extract user info for activity tracking
+    # Extract user info for activity tracking using single DB session
     user_id = drive_service.user_id if hasattr(drive_service, 'user_id') else None
     user_email = None
     if user_id:
-        db = SessionLocal()
         try:
             user = db.query(WebUser).filter(WebUser.id == user_id).first()
             if user:
                 user_email = user.email
         except Exception as e:
             logger.debug(f"Could not get user email: {e}")
-        finally:
-            db.close()
     
     # Extract request metadata
     ip_address = request.client.host if request.client else None
@@ -585,15 +567,14 @@ async def list_directories(
     source = "web" if user_email else "api"
     
     start_time = time.time()
+    activity_service = UserActivityService(db)
     
     try:
         directories = await drive_service.list_directories()
         
-        # Track activity with metadata
+        # Track activity with metadata using same DB session
         duration_ms = int((time.time() - start_time) * 1000)
-        db = SessionLocal()
         try:
-            activity_service = UserActivityService(db)
             metadata = {
                 "directory_count": len(directories) if directories else 0
             }
@@ -613,18 +594,14 @@ async def list_directories(
             )
         except Exception as e:
             logger.error(f"Error recording directories_listed: {e}", exc_info=True)
-        finally:
-            db.close()
         
         return directories
     except asyncio.TimeoutError:
         logger.error("Timeout listing directories")
         
-        # Track timeout
+        # Track timeout using same DB session
         duration_ms = int((time.time() - start_time) * 1000)
-        db = SessionLocal()
         try:
-            activity_service = UserActivityService(db)
             activity_service.record_activity(
                 event_type="directories_listed",
                 action="list",
@@ -641,8 +618,6 @@ async def list_directories(
             )
         except Exception as e:
             logger.error(f"Error recording directories_listed timeout: {e}", exc_info=True)
-        finally:
-            db.close()
         
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
@@ -651,11 +626,9 @@ async def list_directories(
     except Exception as e:
         logger.error(f"Error listing directories: {e}", exc_info=True)
         
-        # Track error
+        # Track error using same DB session
         duration_ms = int((time.time() - start_time) * 1000)
-        db = SessionLocal()
         try:
-            activity_service = UserActivityService(db)
             activity_service.record_activity(
                 event_type="directories_listed",
                 action="list",
@@ -672,8 +645,6 @@ async def list_directories(
             )
         except Exception as e2:
             logger.error(f"Error recording directories_listed error: {e2}", exc_info=True)
-        finally:
-            db.close()
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

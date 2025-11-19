@@ -48,12 +48,15 @@ class ActivityTrackingMiddleware(BaseHTTPMiddleware):
         session_id = request.cookies.get('session_id')
         
         # Try to get user from request state first (set by auth dependency)
+        # This is the most efficient path - no DB query needed
         if hasattr(request.state, 'user_data'):
             user_data = request.state.user_data
             user_id = user_data.get('user_id')
             user_email = user_data.get('user_email')
         
-        # If not in state, try to lookup from session_id in database
+        # Only query database if user info not in request.state
+        # This reduces DB hits significantly since most authenticated requests
+        # will have user_data populated by get_current_user dependency
         if not user_email and session_id:
             db = SessionLocal()
             try:
@@ -61,6 +64,11 @@ class ActivityTrackingMiddleware(BaseHTTPMiddleware):
                 if user:
                     user_id = user.id
                     user_email = user.email
+                    # Store in request.state for potential reuse (though request is almost done)
+                    if not hasattr(request.state, 'user_data'):
+                        request.state.user_data = {}
+                    request.state.user_data['user_id'] = user_id
+                    request.state.user_data['user_email'] = user_email
             except Exception as e:
                 logger.debug(f"Could not lookup user from session: {e}")
             finally:
