@@ -134,13 +134,13 @@ def get_event_type_from_route(method: str, path: str) -> Tuple[Optional[str], Op
     
     # Authentication events
     if '/auth/google/login' in normalized_path:
-        return ('auth_login', 'login')
+        return (None, None)  # Don't track login initiation (callback handles it with user email)
     elif '/auth/google/logout' in normalized_path:
         return ('auth_logout', 'logout')
     elif '/auth/google/status' in normalized_path:
         return (None, None)  # Don't track status checks
     elif '/auth/google/callback' in normalized_path:
-        return (None, None)  # Don't track callback (covered by login)
+        return (None, None)  # Don't track callback (handled manually in endpoint with user email)
     
     # Directory/Drive events
     elif normalized_path.endswith('/directories') and method == 'GET':

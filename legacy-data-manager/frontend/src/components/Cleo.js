@@ -367,6 +367,10 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
         fetchDirectories();
         break;
       case 'analyze':
+        // Only fetch directories if we don't have them yet
+        if (directories.length === 0) {
+          fetchDirectories();
+        }
         setShowDirectorySelection(true);
         setShowAnalysisOptions(false);
         setSelectedDirectory(null);

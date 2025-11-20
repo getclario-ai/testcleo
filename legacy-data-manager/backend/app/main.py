@@ -7,17 +7,29 @@ from app.db.database import engine, Base
 from app.services.google_drive import GoogleDriveService
 from app.services.chat_service import ChatService
 import logging
+import os
 
 # Create database tables (if they don't exist)
 # Ensure Base is imported and contains your models (like SlackUser)
 Base.metadata.create_all(bind=engine) # Uncommented to create tables for SQLite
 
-# Configure logging
+# Configure logging first - supports both DEBUG env var and LOG_LEVEL env var
+# Usage: DEBUG=True uvicorn ... OR LOG_LEVEL=DEBUG uvicorn ...
+if os.getenv("LOG_LEVEL"):
+    # LOG_LEVEL env var takes precedence (e.g., LOG_LEVEL=DEBUG)
+    log_level = getattr(logging, os.getenv("LOG_LEVEL").upper(), logging.INFO)
+elif os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
+    log_level = logging.DEBUG
+else:
+    log_level = logging.INFO
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+if log_level == logging.DEBUG:
+    logger.info("Debug mode enabled - verbose logging active")
 
 # Initialize services
 drive_service = GoogleDriveService()

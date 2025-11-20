@@ -31,6 +31,7 @@ class UserActivityService:
         source: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None,
+        trace_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         status: Optional[str] = None,
         error_message: Optional[str] = None,
@@ -50,6 +51,7 @@ class UserActivityService:
             source: Source of the action ('web', 'slack', 'api')
             ip_address: Client IP address
             user_agent: User agent string
+            trace_id: UUID for correlating related events (e.g., scan_initiated -> scan_completed)
             metadata: Additional context (dict, will be stored as JSON)
             status: Status of the action ('success', 'failed', 'partial')
             error_message: Error message if action failed
@@ -76,6 +78,7 @@ class UserActivityService:
                 source=source,
                 ip_address=ip_address,
                 user_agent=user_agent,
+                trace_id=trace_id,
                 status=status,
                 error_message=error_message,
                 duration_ms=duration_ms,

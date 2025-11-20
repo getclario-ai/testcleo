@@ -101,6 +101,9 @@ class UserActivity(Base):
     # Timing
     duration_ms = Column(Integer, nullable=True)  # Duration in milliseconds
     
+    # Tracing - for linking related events (e.g., scan_initiated -> scan_completed)
+    trace_id = Column(String, nullable=True, index=True)  # UUID for correlating related events
+    
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     
     # Relationship

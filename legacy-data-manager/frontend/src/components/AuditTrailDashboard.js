@@ -8,6 +8,7 @@ import './AuditTrailDashboard.css';
 const EVENT_TYPE_LABELS = {
   'scan_initiated': 'Directory Scan Initiated',
   'scan_completed': 'Directory Scan Completed',
+  'scan_completed_from_cache': 'Directory Scan Completed from Cache',
   'auth_login': 'User Login',
   'auth_logout': 'User Logout',
   'directories_listed': 'List Directories',
@@ -80,15 +81,47 @@ const AuditTrailDashboard = () => {
   }, [selectedEventType, timePeriod]);
 
   // Fetch resource names from Google Drive
+  // Strategy:
+  // 1. Get current user's email from auth status
+  // 2. Try to fetch names for resources where:
+  //    - The current user performed the action (they likely have access, including shared directories)
+  //    - AND we don't already have metadata.directory_name (to avoid unnecessary API calls)
+  // 3. Handle 404s gracefully (user might not have access to some resources)
   const fetchResourceNames = async (activities) => {
     const names = {};
     // Map resource IDs to their types for fallback display
     const resourceTypeMap = {};
     const uniqueResources = new Set();
     
+    // Get current user's email from auth status
+    let currentUserEmail = null;
+    try {
+      const authResponse = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/status`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' }
+      });
+      if (authResponse.ok) {
+        const authData = await authResponse.json();
+        currentUserEmail = authData.email || null;
+      }
+    } catch (err) {
+      logger.warn('Could not get current user email:', err);
+    }
+    
     // Collect unique resource IDs and their types
+    // Only fetch names for resources where:
+    // - The current user performed the action (they have access, including shared directories)
+    // - AND we don't already have metadata.directory_name (to avoid unnecessary API calls)
     activities.forEach(activity => {
-      if (activity.resource_id && (activity.resource_type === 'directory' || activity.resource_type === 'file')) {
+      const metadata = activity.metadata || {};
+      const hasStoredName = metadata.directory_name;
+      const currentUserPerformedAction = !currentUserEmail || activity.user_email === currentUserEmail;
+      
+      if (activity.resource_id && 
+          (activity.resource_type === 'directory' || activity.resource_type === 'file') &&
+          !hasStoredName && // Skip if we already have the name in metadata
+          currentUserPerformedAction) { // Only fetch for resources where current user performed the action
         uniqueResources.add(activity.resource_id);
         resourceTypeMap[activity.resource_id] = activity.resource_type;
       }
@@ -118,7 +151,7 @@ const AuditTrailDashboard = () => {
             names[resourceId] = data.name || resourceId;
             success = true;
           } else if (response.status === 404) {
-            // Resource not found - use fallback
+            // Resource not found - use fallback (don't log as error, might be from another user)
             names[resourceId] = `${resourceType}: ${resourceId.substring(0, 12)}...`;
             success = true; // Don't retry for 404
           } else if (response.status >= 500 && retries > 1) {
@@ -137,8 +170,7 @@ const AuditTrailDashboard = () => {
             await new Promise(resolve => setTimeout(resolve, 500));
             retries--;
           } else {
-            // Final attempt failed - use fallback
-            logger.warn(`Could not fetch name for ${resourceId}:`, err.message);
+            // Final attempt failed - use fallback (don't log as error)
             names[resourceId] = `${resourceType}: ${resourceId.substring(0, 12)}...`;
             success = true;
           }
@@ -296,6 +328,10 @@ const AuditTrailDashboard = () => {
       }
       if (metadata.duplicate_count !== undefined && metadata.duplicate_count > 0) {
         parts.push(`${metadata.duplicate_count} duplicates`);
+      }
+      // Show "from cache" indicator if this was a cache hit
+      if (metadata.from_cache === true) {
+        parts.push('(from cache)');
       }
       if (parts.length > 0) {
         return parts.join(', ');

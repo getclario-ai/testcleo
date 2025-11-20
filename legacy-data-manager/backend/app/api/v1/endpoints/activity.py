@@ -82,6 +82,7 @@ async def get_activities(
                 "source": activity.source,
                 "ip_address": activity.ip_address,
                 "user_agent": activity.user_agent,
+                "trace_id": activity.trace_id,
                 "metadata": metadata,
                 "status": activity.status,
                 "error_message": activity.error_message,

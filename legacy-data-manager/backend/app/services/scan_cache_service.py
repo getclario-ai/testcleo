@@ -70,13 +70,14 @@ class ScanCacheService:
                         return None
             else:
                 # Shared directory cache (all users share same directory cache)
+                logger.debug(f"Checking shared directory cache for {target_id} (user_id={self.user_id}, cache_keys={list(_directory_cache.keys())})")
                 cache_entry = _directory_cache.get(target_id)
                 if not cache_entry:
                     # Legacy mode: check global cache
                     if self.user_id is None:
                         cache_entry = _global_cache['directories'].get(target_id)
                     if not cache_entry:
-                        logger.debug(f"No cache found for directory {target_id}")
+                        logger.info(f"❌ No cache found for directory {target_id} (user_id={self.user_id}, available_keys={list(_directory_cache.keys())})")
                         return None
 
             if not cache_entry or not cache_entry.get('last_scan'):
