@@ -1,0 +1,28 @@
+steps:
+  # Build the Docker image with API URL as build argument
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/legacy-data-frontend:latest'
+      - '--build-arg'
+      - 'REACT_APP_API_BASE_URL=${_API_BASE_URL}'
+      - '-f'
+      - 'frontend/Dockerfile'
+      - 'frontend'
+  
+  # Push the image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'push'
+      - 'us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/legacy-data-frontend:latest'
+
+images:
+  - 'us-central1-docker.pkg.dev/${PROJECT_ID}/cloud-run-source-deploy/legacy-data-frontend:latest'
+
+substitutions:
+  _API_BASE_URL: 'http://localhost:8000' # Default, overridden by deploy script
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+

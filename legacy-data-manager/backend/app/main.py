@@ -9,10 +9,6 @@ from app.services.chat_service import ChatService
 import logging
 import os
 
-# Create database tables (if they don't exist)
-# Ensure Base is imported and contains your models (like SlackUser)
-Base.metadata.create_all(bind=engine) # Uncommented to create tables for SQLite
-
 # Configure logging first - supports both DEBUG env var and LOG_LEVEL env var
 # Usage: DEBUG=True uvicorn ... OR LOG_LEVEL=DEBUG uvicorn ...
 if os.getenv("LOG_LEVEL"):
@@ -30,6 +26,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 if log_level == logging.DEBUG:
     logger.info("Debug mode enabled - verbose logging active")
+
+# Import all models to ensure they're registered with Base.metadata
+# This must happen BEFORE Base.metadata.create_all()
+from app.db.models import (
+    SlackUser,
+    WebUser,
+    SlackLinkingAudit,
+    UserActivity  # User activity tracking model
+)
+
+# Create database tables (if they don't exist)
+# All models must be imported above for this to work
+# Note: For Cloud SQL, connection is lazy - tables will be created on first use
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    logger.warning(f"Could not create database tables on startup: {e}. Will retry on first use.")
 
 # Initialize services
 drive_service = GoogleDriveService()
