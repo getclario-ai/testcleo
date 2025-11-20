@@ -56,15 +56,12 @@ async def _trigger_notifications(
     Called asynchronously so it doesn't block the scan response.
     """
     try:
-        logger.info(f"Triggering notifications for directory {directory_id}")
-        
         # Get directory name for notification
         directory_name = directory_id
         try:
             directory_metadata = await drive_service.get_file_metadata(directory_id)
             if directory_metadata and 'name' in directory_metadata:
                 directory_name = directory_metadata['name']
-                logger.info(f"Directory name for notification: {directory_name}")
         except Exception as e:
             logger.warning(f"Could not get directory name for notification: {e}")
         
@@ -83,14 +80,8 @@ async def _trigger_notifications(
                     user = db.query(WebUser).filter(WebUser.id == drive_service.user_id).first()
                     if user and user.email:
                         user_email = user.email
-                        logger.info(f"User email for notification: {user_email}")
                 except Exception as e:
                     logger.warning(f"Could not get user email for notification: {e}")
-            
-            # Check if notifications should be sent
-            notification_flags = notification_service.should_send_notification(scan_results)
-            logger.info(f"Notification flags: {notification_flags}")
-            logger.info(f"Scan stats: {scan_results.get('stats', {})}")
             
             # Send notifications (this is already async, and we're in an async context)
             await notification_service.send_scan_notifications(
@@ -99,7 +90,7 @@ async def _trigger_notifications(
                 scan_results=scan_results,
                 triggered_by_email=user_email
             )
-            logger.info(f"Notification process completed for {directory_name}")
+            logger.debug(f"Notifications sent for directory {directory_name}")
         finally:
             db.close()
     except Exception as e:
@@ -386,11 +377,10 @@ async def analyze_directory(
     
     # Resolve shortcut to target folder ID BEFORE cache check (so cache lookup uses the actual target ID)
     actual_folder_id = folder_id
-    original_folder_id = folder_id
     try:
-        actual_folder_id, original_folder_id = await drive_service.resolve_shortcut(folder_id)
+        actual_folder_id, _ = await drive_service.resolve_shortcut(folder_id)
         if actual_folder_id != folder_id:
-            logger.info(f"Resolved shortcut {folder_id} to target folder {actual_folder_id}")
+            logger.debug(f"Resolved shortcut {folder_id} to target {actual_folder_id} (user_id={user_id})")
     except Exception as e:
         logger.warning(f"Could not resolve shortcut for {folder_id}: {e}, using as-is")
         # Continue with original folder_id if resolution fails
@@ -442,7 +432,7 @@ async def analyze_directory(
     try:
         # Check cache first
         if cached_result:
-            logger.debug(f"Cache hit for directory {folder_id} (resolved: {actual_folder_id}, user_id={user_id})")
+            logger.info(f"Scan from cache: directory '{directory_name}' ({actual_folder_id}), user_id={user_id}")
             
             if directory_metadata:
                 cached_result["directory"] = {
@@ -485,7 +475,7 @@ async def analyze_directory(
             
             return cached_result
         else:
-            logger.debug(f"Cache miss for directory {folder_id} (resolved: {actual_folder_id}, user_id={user_id})")
+            logger.info(f"Scan starting: directory '{directory_name}' ({actual_folder_id}), user_id={user_id}")
 
         # Initialize response structure
         response = initialize_response_structure()
@@ -509,11 +499,10 @@ async def analyze_directory(
                     "name": directory_name
                 }
             
-            logger.info(f"Scan complete for directory {folder_id} (resolved: {actual_folder_id}), updating cache")
-            scan_cache.update_cache(actual_folder_id, response)  # Cache using resolved target ID
-            
             # Calculate duration
             duration_ms = int((time.time() - scan_start_time) * 1000)
+            logger.info(f"Scan complete: directory '{directory_name}' ({actual_folder_id}), {duration_ms}ms, {response.get('stats', {}).get('total_documents', 0)} files, user_id={user_id}")
+            scan_cache.update_cache(actual_folder_id, response)  # Cache using resolved target ID
             
             # Track scan completed with metadata using same DB session
             try:

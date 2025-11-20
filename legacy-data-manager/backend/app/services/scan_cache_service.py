@@ -42,9 +42,6 @@ class ScanCacheService:
                     'last_scan': None,
                     'data': None
                 }
-                logger.debug(f"Initialized per-user drive cache for user_id={user_id}")
-            else:
-                logger.debug(f"Using existing per-user drive cache for user_id={user_id}")
         else:
             logger.warning("Using global cache (legacy mode) - user_id is None")
 
@@ -70,27 +67,26 @@ class ScanCacheService:
                         return None
             else:
                 # Shared directory cache (all users share same directory cache)
-                logger.debug(f"Checking shared directory cache for {target_id} (user_id={self.user_id}, cache_keys={list(_directory_cache.keys())})")
                 cache_entry = _directory_cache.get(target_id)
                 if not cache_entry:
                     # Legacy mode: check global cache
                     if self.user_id is None:
                         cache_entry = _global_cache['directories'].get(target_id)
                     if not cache_entry:
-                        logger.info(f"❌ No cache found for directory {target_id} (user_id={self.user_id}, available_keys={list(_directory_cache.keys())})")
+                        logger.debug(f"Cache miss for directory {target_id} (user_id={self.user_id})")
                         return None
 
             if not cache_entry or not cache_entry.get('last_scan'):
-                logger.debug(f"No cache entry found for {target_id}")
                 return None
 
             # Check if cache is expired
             if datetime.utcnow() - cache_entry['last_scan'] > self.cache_ttl:
-                logger.info(f"Cache expired for {target_id}")
+                logger.debug(f"Cache expired for {target_id} (user_id={self.user_id})")
                 return None
 
+            # Cache hit - log for debugging customer issues
             cache_type = "shared directory" if target_id != 'drive' else f"user_{self.user_id} drive"
-            logger.info(f"Using cached result for {target_id} (type={cache_type})")
+            logger.debug(f"Cache hit for {target_id} (type={cache_type}, user_id={self.user_id})")
             return cache_entry['data']
 
         except Exception as e:
@@ -120,7 +116,6 @@ class ScanCacheService:
                         'last_scan': datetime.utcnow(),
                         'data': data
                     }
-                    logger.debug(f"Updated drive cache for user_id={self.user_id}")
             else:
                 # Shared directory cache (all users share same directory cache)
                 if target_id not in _directory_cache:
@@ -136,9 +131,6 @@ class ScanCacheService:
                     'last_scan': datetime.utcnow(),
                     'data': data
                 })
-                
-                scanned_by = _directory_cache[target_id].get('scanned_by_users', [])
-                logger.debug(f"Updated shared directory cache for {target_id} (scanned by users: {scanned_by})")
                 
                 # Legacy mode: also update global cache
                 if self.user_id is None:
