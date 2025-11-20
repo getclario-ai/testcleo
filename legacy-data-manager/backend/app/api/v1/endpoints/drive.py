@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request, Depends, status, BackgroundTasks
 from typing import Dict, List, Optional
+from sqlalchemy.orm import Session
 from ....services.google_drive import GoogleDriveService
 from ....core.config import settings
 import logging
@@ -7,14 +8,22 @@ from datetime import datetime, timezone, timedelta
 import json
 import uuid
 import asyncio
+import time
 from ....core.auth import get_current_user # Assumed to return a UserContext object
 from ....services.file_scanner_with_json import scan_files
 from ....services.scan_cache_service import ScanCacheService
 from ....services.slack_service import SlackService
 from ....services.chat_service import ChatService
 from ....services.notification_service import NotificationService
+from ....services.user_activity_service import UserActivityService
 from ....db.database import get_db, SessionLocal
-from asyncio import Lock, TimeoutError
+from ....db.models import WebUser
+
+# Import for handling Google API errors
+try:
+    from googleapiclient.errors import HttpError
+except ImportError:
+    HttpError = None  # Fallback if not available
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -291,6 +300,16 @@ async def get_file_metadata(
         metadata = await drive_service.get_file_metadata(file_id)
         return metadata
     except Exception as e:
+        # Check if it's a Google API HttpError 404 (file not found)
+        if HttpError and isinstance(e, HttpError):
+            if e.resp.status == 404:
+                logger.warning(f"File not found: {file_id}")
+                raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+        # Fallback: check error string for 404
+        elif "HttpError" in str(type(e).__name__) and "404" in str(e):
+            logger.warning(f"File not found: {file_id}")
+            raise HTTPException(status_code=404, detail=f"File not found: {file_id}")
+        
         logger.error(f"Error retrieving file metadata for {file_id}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal server error occurred.")
 
@@ -344,31 +363,129 @@ async def list_directory_files(
 async def analyze_directory(
     folder_id: str,
     background_tasks: BackgroundTasks,
+    request: Request,
     drive_service: GoogleDriveService = Depends(get_current_user),
-    scan_cache: ScanCacheService = Depends(get_scan_cache_service)
+    scan_cache: ScanCacheService = Depends(get_scan_cache_service),
+    db: Session = Depends(get_db)  # Single DB session for entire endpoint
 ):
-    try:
-        # Log user context for debugging
-        user_id = drive_service.user_id if hasattr(drive_service, 'user_id') else None
-        logger.info(f"Analyze request for directory {folder_id} - user_id={user_id}, cache_user_id={scan_cache.user_id}")
-        
-        # Fetch directory metadata to include in response
-        directory_metadata = None
+    # Extract user info for activity tracking using single DB session
+    user_id = drive_service.user_id if hasattr(drive_service, 'user_id') else None
+    user_email = None
+    if user_id:
         try:
-            directory_metadata = await drive_service.get_file_metadata(folder_id)
+            user = db.query(WebUser).filter(WebUser.id == user_id).first()
+            if user:
+                user_email = user.email
         except Exception as e:
-            logger.warning(f"Could not fetch directory metadata for {folder_id}: {e}")
-        
+            logger.debug(f"Could not get user email: {e}")
+    
+    # Extract request metadata
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get('user-agent')
+    source = "web" if user_email else "api"
+    
+    # Resolve shortcut to target folder ID BEFORE cache check (so cache lookup uses the actual target ID)
+    actual_folder_id = folder_id
+    original_folder_id = folder_id
+    try:
+        actual_folder_id, original_folder_id = await drive_service.resolve_shortcut(folder_id)
+        if actual_folder_id != folder_id:
+            logger.info(f"Resolved shortcut {folder_id} to target folder {actual_folder_id}")
+    except Exception as e:
+        logger.warning(f"Could not resolve shortcut for {folder_id}: {e}, using as-is")
+        # Continue with original folder_id if resolution fails
+    
+    # Fetch directory metadata first (for scan_initiated tracking)
+    directory_metadata = None
+    directory_name = actual_folder_id
+    try:
+        directory_metadata = await drive_service.get_file_metadata(actual_folder_id)
+        if directory_metadata:
+            directory_name = directory_metadata.get("name", actual_folder_id)
+    except Exception as e:
+        logger.warning(f"Could not fetch directory metadata for {actual_folder_id}: {e}")
+    
+    # Track scan initiated using same DB session
+    scan_start_time = time.time()
+    activity_service = UserActivityService(db)
+    trace_id = None  # Will be generated for new scans
+    
+    # Check cache using the RESOLVED target folder ID (not the shortcut ID)
+    # This ensures shortcuts pointing to the same target share the cache
+    cached_result = scan_cache.get_cached_result(actual_folder_id)
+    
+    # Only record scan_initiated if NOT from cache (cache hits don't need initiation)
+    if not cached_result:
+        trace_id = str(uuid.uuid4())  # Generate trace ID for this scan operation
+        try:
+            metadata = {
+                "directory_name": directory_name
+            }
+            activity_service.record_activity(
+                event_type="scan_initiated",
+                action="analyze",
+                user_id=user_id,
+                user_email=user_email,
+                resource_type="directory",
+                resource_id=actual_folder_id,  # Use resolved ID for consistency
+                source=source,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                trace_id=trace_id,  # Link scan_initiated to scan_completed
+                status="in_progress",
+                duration_ms=0,
+                metadata=metadata
+            )
+        except Exception as e:
+            logger.error(f"Error recording scan_initiated: {e}", exc_info=True)
+    
+    try:
         # Check cache first
-        cached_result = scan_cache.get_cached_result(folder_id)
         if cached_result:
-            logger.info(f"Using cached result for directory {folder_id} (user_id={user_id})")
+            logger.debug(f"Cache hit for directory {folder_id} (resolved: {actual_folder_id}, user_id={user_id})")
+            
             if directory_metadata:
                 cached_result["directory"] = {
-                    "id": folder_id,
-                    "name": directory_metadata.get("name", folder_id)
+                    "id": actual_folder_id,  # Use resolved ID
+                    "name": directory_name
                 }
+            
+            # Track scan completed from cache using same DB session
+            # Note: We don't record scan_initiated for cache hits since the scan was already done
+            # But we record scan_completed to show it was retrieved from cache
+            duration_ms = int((time.time() - scan_start_time) * 1000)
+            
+            try:
+                stats = cached_result.get("stats", {})
+                metadata = {
+                    "file_count": stats.get("total_documents", 0),
+                    "sensitive_count": stats.get("total_sensitive", 0),
+                    "duplicate_count": stats.get("total_duplicates", 0),
+                    "directory_name": directory_name,
+                    "from_cache": True  # Indicate this was from cache
+                }
+                
+                activity_service.record_activity(
+                    event_type="scan_completed",
+                    action="analyze",
+                    user_id=user_id,
+                    user_email=user_email,
+                    resource_type="directory",
+                    resource_id=actual_folder_id,  # Use resolved ID for consistency
+                    source=source,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    trace_id=None,  # Cache hits don't have trace_id (no scan_initiated was recorded for this user)
+                    status="success",
+                    duration_ms=duration_ms,
+                    metadata=metadata
+                )
+            except Exception as e:
+                logger.error(f"Error recording scan_completed from cache: {e}", exc_info=True)
+            
             return cached_result
+        else:
+            logger.debug(f"Cache miss for directory {folder_id} (resolved: {actual_folder_id}, user_id={user_id})")
 
         # Initialize response structure
         response = initialize_response_structure()
@@ -376,26 +493,54 @@ async def analyze_directory(
         if directory_metadata:
             response["directory"] = {
                 "id": folder_id,
-                "name": directory_metadata.get("name", folder_id)
+                "name": directory_name
             }
         
         # ⚠️ REMOVED: Redundant drive_service.list_directory() call is gone.
             
-        # Process files using the scanner
+        # Process files using the scanner (use resolved target folder ID)
         try:
-            response = await scan_files(source='gdrive', path_or_drive_id=folder_id, drive_service=drive_service)
+            response = await scan_files(source='gdrive', path_or_drive_id=actual_folder_id, drive_service=drive_service)
             response["scan_complete"] = True
             
             if directory_metadata:
                 response["directory"] = {
-                    "id": folder_id,
-                    "name": directory_metadata.get("name", folder_id)
+                    "id": actual_folder_id,  # Use resolved ID
+                    "name": directory_name
                 }
             
-            logger.info(f"Scan complete for directory {folder_id} (user_id={user_id}), updating cache")
-            scan_cache.update_cache(folder_id, response)
+            logger.info(f"Scan complete for directory {folder_id} (resolved: {actual_folder_id}), updating cache")
+            scan_cache.update_cache(actual_folder_id, response)  # Cache using resolved target ID
             
-            # ... (DEBUG logging remains the same) ...
+            # Calculate duration
+            duration_ms = int((time.time() - scan_start_time) * 1000)
+            
+            # Track scan completed with metadata using same DB session
+            try:
+                stats = response.get("stats", {})
+                metadata = {
+                    "file_count": stats.get("total_documents", 0),
+                    "sensitive_count": stats.get("total_sensitive", 0),
+                    "duplicate_count": stats.get("total_duplicates", 0),
+                    "directory_name": directory_name
+                }
+                activity_service.record_activity(
+                    event_type="scan_completed",
+                    action="analyze",
+                    user_id=user_id,
+                    user_email=user_email,
+                    resource_type="directory",
+                    resource_id=actual_folder_id,  # Use resolved ID for consistency
+                    source=source,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    trace_id=trace_id,  # Use the same trace_id from scan_initiated
+                    status="success",
+                    duration_ms=duration_ms,
+                    metadata=metadata
+                )
+            except Exception as e:
+                logger.error(f"Error recording scan_completed: {e}", exc_info=True)
             
             # Send notifications if issues found
             background_tasks.add_task(
@@ -409,13 +554,61 @@ async def analyze_directory(
             return response
         except Exception as e:
             logger.error(f"Error scanning files: {e}", exc_info=True)
+            
+            # Track scan failed using same DB session
+            duration_ms = int((time.time() - scan_start_time) * 1000)
+            try:
+                # Error message will be sanitized in record_activity
+                activity_service.record_activity(
+                    event_type="scan_completed",
+                    action="analyze",
+                    user_id=user_id,
+                    user_email=user_email,
+                    resource_type="directory",
+                    resource_id=actual_folder_id,  # Use resolved ID for consistency
+                    source=source,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    trace_id=trace_id,  # Use the same trace_id from scan_initiated
+                    status="failed",
+                    duration_ms=duration_ms,
+                    error_message=str(e)  # Will be sanitized in UserActivityService
+                )
+            except Exception as e2:
+                logger.error(f"Error recording scan failure: {e2}", exc_info=True)
+            
             raise HTTPException(
                 status_code=500,
                 detail="An error occurred during file analysis." # ⚠️ IMPROVEMENT: Generic message
             )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error analyzing directory: {e}", exc_info=True)
+        
+        # Track scan error using same DB session
+        duration_ms = int((time.time() - scan_start_time) * 1000)
+        try:
+            # Error message will be sanitized in record_activity
+            activity_service.record_activity(
+                event_type="scan_completed",
+                action="analyze",
+                user_id=user_id,
+                user_email=user_email,
+                resource_type="directory",
+                resource_id=actual_folder_id,  # Use resolved ID for consistency
+                source=source,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                trace_id=trace_id,  # Use the same trace_id from scan_initiated (if it was generated)
+                status="error",
+                duration_ms=duration_ms,
+                error_message=str(e)  # Will be sanitized in UserActivityService
+            )
+        except Exception as e2:
+            logger.error(f"Error recording scan error: {e2}", exc_info=True)
+        
         raise HTTPException(
             status_code=500,
             detail="An internal server error occurred while analyzing the directory." # ⚠️ IMPROVEMENT: Generic message
@@ -423,20 +616,107 @@ async def analyze_directory(
 
 @router.get("/directories", response_model=List[Dict])
 async def list_directories(
-    drive_service: GoogleDriveService = Depends(get_current_user)
+    request: Request,
+    drive_service: GoogleDriveService = Depends(get_current_user),
+    db: Session = Depends(get_db)  # Single DB session for entire endpoint
 ) -> List[Dict]:
     """List all directories in the user's drive."""
+    # Extract user info for activity tracking using single DB session
+    user_id = drive_service.user_id if hasattr(drive_service, 'user_id') else None
+    user_email = None
+    if user_id:
+        try:
+            user = db.query(WebUser).filter(WebUser.id == user_id).first()
+            if user:
+                user_email = user.email
+        except Exception as e:
+            logger.debug(f"Could not get user email: {e}")
+    
+    # Extract request metadata
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get('user-agent')
+    source = "web" if user_email else "api"
+    
+    start_time = time.time()
+    activity_service = UserActivityService(db)
+    
     try:
         directories = await drive_service.list_directories()
+        
+        # Track activity with metadata using same DB session
+        duration_ms = int((time.time() - start_time) * 1000)
+        try:
+            metadata = {
+                "directory_count": len(directories) if directories else 0
+            }
+            activity_service.record_activity(
+                event_type="directories_listed",
+                action="list",
+                user_id=user_id,
+                user_email=user_email,
+                resource_type=None,  # This is a list operation, not a specific resource
+                resource_id=None,
+                source=source,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="success",
+                duration_ms=duration_ms,
+                metadata=metadata
+            )
+        except Exception as e:
+            logger.error(f"Error recording directories_listed: {e}", exc_info=True)
+        
         return directories
     except asyncio.TimeoutError:
         logger.error("Timeout listing directories")
+        
+        # Track timeout using same DB session
+        duration_ms = int((time.time() - start_time) * 1000)
+        try:
+            activity_service.record_activity(
+                event_type="directories_listed",
+                action="list",
+                user_id=user_id,
+                user_email=user_email,
+                resource_type=None,
+                resource_id=None,
+                source=source,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="failed",
+                duration_ms=duration_ms,
+                error_message="Operation timed out"
+            )
+        except Exception as e:
+            logger.error(f"Error recording directories_listed timeout: {e}", exc_info=True)
+        
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail="Operation timed out"
         )
     except Exception as e:
         logger.error(f"Error listing directories: {e}", exc_info=True)
+        
+        # Track error using same DB session
+        duration_ms = int((time.time() - start_time) * 1000)
+        try:
+            activity_service.record_activity(
+                event_type="directories_listed",
+                action="list",
+                user_id=user_id,
+                user_email=user_email,
+                resource_type=None,
+                resource_id=None,
+                source=source,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="error",
+                duration_ms=duration_ms,
+                error_message=str(e)
+            )
+        except Exception as e2:
+            logger.error(f"Error recording directories_listed error: {e2}", exc_info=True)
+        
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"

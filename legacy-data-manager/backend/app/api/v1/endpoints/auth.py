@@ -170,6 +170,30 @@ async def google_callback(
         db.commit()
         db.refresh(user)
         
+        # Track login activity with user email
+        try:
+            from ....services.user_activity_service import UserActivityService
+            activity_service = UserActivityService(db)
+            ip_address = request.client.host if request.client else None
+            user_agent = request.headers.get('user-agent')
+            
+            activity_service.record_activity(
+                event_type="auth_login",
+                action="login",
+                user_id=user.id,
+                user_email=email,
+                resource_type=None,
+                resource_id=None,
+                source="web",
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="success",
+                duration_ms=0,
+                metadata={}
+            )
+        except Exception as e:
+            logger.error(f"Error recording login activity: {e}", exc_info=True)
+        
         # Create redirect response
         redirect_response = RedirectResponse(url=f"{frontend_url}/")
         

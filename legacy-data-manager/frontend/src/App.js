@@ -7,9 +7,11 @@ import FileInsightsDashboard from './components/FileInsightsDashboard';
 import RiskCategoryInsightsDashboard from './components/RiskCategoryInsightsDashboard';
 import ReviewSensitiveFiles from './components/ReviewSensitiveFiles';
 import DepartmentDashboard from './components/DepartmentDashboard';
+import AuditTrailDashboard from './components/AuditTrailDashboard';
 import FileTypeChart from './components/FileTypeChart';
 import RiskCategoryChart from './components/RiskCategoryChart';
 import { getFileTypeColor, getRiskCategoryColor } from './constants/colors';
+import logger from './utils/logger';
 import './App.css';
 import config from './config';
 
@@ -63,7 +65,7 @@ function AppContent() {
     // Only process URL parameter if it's different from current selection
     // This prevents overwriting when user scans from Cleo
     if (directoryId && (!selectedDirectory || selectedDirectory.id !== directoryId)) {
-      console.log('Loading directory from URL parameter:', directoryId);
+      logger.log('Loading directory from URL parameter:', directoryId);
       
       // Auto-trigger analysis for this directory
       // First, set it as selected
@@ -95,7 +97,7 @@ function AppContent() {
               }
             }
           } catch (error) {
-            console.warn('Could not fetch directory metadata:', error);
+            logger.warn('Could not fetch directory metadata:', error);
           }
           
           // Now trigger the analysis
@@ -119,7 +121,7 @@ function AppContent() {
             // Guard: Only update stats if this response matches the directory we requested
             // This prevents race conditions where multiple requests complete out of order
             if (responseDirectoryId !== requestedDirectoryId) {
-              console.log(`Ignoring response for ${responseDirectoryId} - requested ${requestedDirectoryId}`);
+              logger.log(`Ignoring response for ${responseDirectoryId} - requested ${requestedDirectoryId}`);
               return;
             }
             
@@ -127,7 +129,7 @@ function AppContent() {
             // (to prevent overwriting with stale data if user switched directories)
             const currentSelectedId = selectedDirectory?.id;
             if (currentSelectedId && currentSelectedId !== requestedDirectoryId) {
-              console.log(`Ignoring response for ${requestedDirectoryId} - user switched to ${currentSelectedId}`);
+              logger.log(`Ignoring response for ${requestedDirectoryId} - user switched to ${currentSelectedId}`);
               return;
             }
             
@@ -148,10 +150,10 @@ function AppContent() {
             
             setStats(transformedData);
             setSelectedDirectory(transformedData.directory);
-            console.log(`Auto-loaded directory analysis from URL for ${responseDirectoryId}`);
+            logger.log(`Auto-loaded directory analysis from URL for ${responseDirectoryId}`);
           }
         } catch (error) {
-          console.error('Error loading directory from URL:', error);
+          logger.error('Error loading directory from URL:', error);
         }
       };
       
@@ -173,13 +175,13 @@ function AppContent() {
         // Cleaning command will be handled by Cleo component
         break;
       default:
-        console.warn('Unknown command:', command.name);
+        logger.warn('Unknown command:', command.name);
     }
   };
 
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     const stored = localStorage.getItem('isAuthenticated') === 'true';
-    console.log('Initial auth state from localStorage:', stored);
+    logger.log('Initial auth state from localStorage:', stored);
     return stored;
   });
   const [authChecked, setAuthChecked] = useState(false);
@@ -188,7 +190,7 @@ function AppContent() {
   // Check auth status from backend on mount (important after OAuth redirect)
   useEffect(() => {
     const checkAuthStatus = async () => {
-      console.log('Checking auth status from backend...');
+      logger.log('Checking auth status from backend...');
       try {
         const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/status`, {
           method: 'GET',
@@ -200,7 +202,7 @@ function AppContent() {
 
         if (response.ok) {
           const data = await response.json();
-          console.log('Auth status from backend:', data);
+          logger.log('Auth status from backend:', data);
           const authenticated = data.isAuthenticated === true;
           
           setIsAuthenticated(authenticated);
@@ -212,13 +214,13 @@ function AppContent() {
             localStorage.removeItem('isAuthenticated');
           }
         } else {
-          console.warn('Auth status check failed:', response.status);
+          logger.warn('Auth status check failed:', response.status);
           setIsAuthenticated(false);
           setAuthChecked(true);
           localStorage.removeItem('isAuthenticated');
         }
       } catch (error) {
-        console.error('Error checking auth status:', error);
+        logger.error('Error checking auth status:', error);
         setIsAuthenticated(false);
         setAuthChecked(true);
         localStorage.removeItem('isAuthenticated');
@@ -231,20 +233,20 @@ function AppContent() {
   }, []); // Run once on mount
 
   const handleStatsUpdate = (newStats) => {
-    console.log('Received new stats in App.js:', newStats);
+    logger.log('Received new stats in App.js:', newStats);
     
     if (newStats.directory) {
-      console.log('Updating selectedDirectory to:', newStats.directory);
+      logger.log('Updating selectedDirectory to:', newStats.directory);
       setSelectedDirectory(newStats.directory);
     } else {
-      console.warn('handleStatsUpdate: newStats.directory is missing!', newStats);
+      logger.warn('handleStatsUpdate: newStats.directory is missing!', newStats);
     }
     
     setStats(newStats);
   };
 
   const handleLogout = async () => {
-    console.log('Logging out...');
+    logger.log('Logging out...');
     try {
       const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/logout`, {
         method: 'POST',
@@ -255,7 +257,7 @@ function AppContent() {
       });
 
       if (response.ok) {
-        console.log('Logout successful');
+        logger.log('Logout successful');
         // Clear auth state
         setIsAuthenticated(false);
         localStorage.removeItem('isAuthenticated');
@@ -264,14 +266,14 @@ function AppContent() {
         // Refresh page to clear all state
         window.location.href = '/';
       } else {
-        console.error('Logout failed:', response.status);
+        logger.error('Logout failed:', response.status);
         // Still clear local state even if backend call fails
         setIsAuthenticated(false);
         localStorage.removeItem('isAuthenticated');
         window.location.href = '/';
       }
     } catch (error) {
-      console.error('Error during logout:', error);
+      logger.error('Error during logout:', error);
       // Still clear local state even if backend call fails
       setIsAuthenticated(false);
       localStorage.removeItem('isAuthenticated');
@@ -306,7 +308,7 @@ function AppContent() {
 
   // Add the sensitive documents click handler
   const handleSensitiveDocumentsClick = () => {
-    console.log('Sensitive documents tile clicked!');
+    logger.log('Sensitive documents tile clicked!');
     navigate('/sensitive-content', {
       state: {
         selectedDirectory,
@@ -580,6 +582,7 @@ function AppContent() {
       <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
       <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />
       <Route path="/department/:departmentSlug" element={<DepartmentDashboard />} />
+      <Route path="/audit-trail" element={<AuditTrailDashboard />} />
       <Route
         path="/"
         element={
@@ -738,6 +741,7 @@ function App() {
         <Route path="/file-category/:ageGroup/:fileType" element={<FileInsightsDashboard />} />
         <Route path="/review-sensitive-files" element={<ReviewSensitiveFiles />} />
         <Route path="/department/:departmentSlug" element={<DepartmentDashboard />} />
+        <Route path="/audit-trail" element={<AuditTrailDashboard />} />
         <Route
           path="/"
           element={<AppContent />}

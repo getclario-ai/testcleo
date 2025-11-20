@@ -222,7 +222,7 @@ const ChatInterface = () => {
     return (
       <div className="bg-white rounded-lg shadow-lg overflow-hidden">
         <div className="p-6">
-          <h2 className="text-2xl font-bold text-gray-900 mb-4">Welcome to Legacy Data Manager</h2>
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">Welcome to Clario</h2>
           {authError && (
             <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
               Authentication error. Please re-authenticate to continue.

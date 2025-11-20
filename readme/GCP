@@ -1,0 +1,71 @@
+# Backend
+https://legacy-data-api-614240891036.us-central1.run.app
+
+# Build and deploy Backend Step 1: Navigate to backend directory
+cd /Users/madhuvohra/Madhu/clario/development/legacy-data-manager/backend
+
+# Step 2: Build and push the Docker image to Artifact Registry
+# This will take a few minutes
+gcloud builds submit --tag us-central1-docker.pkg.dev/clario-stage-1/cloud-run-source-deploy/legacy-data-api:latest .
+
+# Step 3: Deploy the new image to Cloud Run
+# This will create a new revision with the updated code
+gcloud run deploy legacy-data-api \
+  --image us-central1-docker.pkg.dev/clario-stage-1/cloud-run-source-deploy/legacy-data-api:latest \
+  --region us-central1 \
+  --platform managed \
+  --allow-unauthenticated
+
+
+gcloud run deploy legacy-data-api \
+  --image us-central1-docker.pkg.dev/clario-stage-1/cloud-run-source-deploy/legacy-data-api:latest \
+  --region us-central1 \
+  --platform managed \
+  --allow-unauthenticated \
+  --add-cloudsql-instances clario-stage-1:us-central1:legacy-data-db \
+  --set-env-vars "DATABASE_URL=postgresql://postgres:ClarioStg1@/legacy_data?host=/cloudsql/clario-stage-1:us-central1:legacy-data-db,FRONTEND_URL=https://legacy-data-frontend-614240891036.us-central1.run.app,GOOGLE_REDIRECT_URI=https://legacy-data-api-614240891036.us-central1.run.app/api/v1/auth/google/callback" \
+  --set-secrets "GOOGLE_CLIENT_ID=google-client-id:latest,GOOGLE_CLIENT_SECRET=google-client-secret:latest,SLACK_SIGNING_SECRET=slack-signing-secret:latest,SLACK_BOT_TOKEN=slack-bot-token:latest"
+
+     https://legacy-data-api-1003880222498.us-central1.run.app/api/v1/auth/google/callback
+
+  Service URL: https://legacy-data-api-1003880222498.us-central1.run.app   
+# Step 4: Verify the deployment
+gcloud run services describe legacy-data-api --region=us-central1 --format="value(status.url)"
+
+
+# ######
+# URLs:
+Frontend: https://legacy-data-frontend-1003880222498.us-central1.run.app
+Backend: https://legacy-data-api-1003880222498.us-central1.run.app
+
+
+########################################################
+# GCP LOGS
+########################################################
+# View recent logs
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=legacy-data-api" \
+--limit=50 --project=c-stg-2
+
+# Stream real-time logs
+gcloud logging tail "resource.type=cloud_run_revision AND resource.labels.service_name=legacy-data-api" \
+  --project=c-stg-2t
+
+  # Read recent logs (simpler command)
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=legacy-data-api" \
+  --limit=20 \
+  --project=c-stg-2
+
+# Read only errors
+gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=legacy-data-api AND severity>=ERROR" \
+  --limit=10 \
+  --project=c-stg-2
+
+########################################################
+# GCP Deploy
+########################################################
+
+cd legacy-data-manager
+./deploy-to-gcp.sh  # Deploy both backend and frontend
+./deploy-to-gcp.sh --backend-only # Deploy only backend
+./deploy-to-gcp.sh --frontend-only # Deploy only frontend
+

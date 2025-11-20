@@ -14,8 +14,7 @@ from .google_drive import GoogleDriveService
 import asyncio
 import logging
 
-# Set up logging
-logging.basicConfig(level=logging.DEBUG)
+# Set up logging (level is configured in main.py)
 logger = logging.getLogger(__name__)
 
 # =============================================================================
@@ -478,7 +477,7 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
     }
 
     # Add logging for file type mapping
-    logger.info(f"Using file type mapping: {file_type_map}")
+    logger.debug(f"Using file type mapping: {file_type_map}")
     type_counts = {k: 0 for k in file_type_map.keys() | {"others"}}
 
     if source == 'local':
@@ -532,7 +531,7 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                     mime_type = file['mimeType']
                     
                     # Log file type categorization
-                    logger.info(f"Processing file: {name} (mime_type: {mime_type})")
+                    logger.debug(f"Processing file: {name} (mime_type: {mime_type})")
                     
                     # Get file extension from mime type or name
                     ext = mime_type_map.get(mime_type, None)
@@ -627,8 +626,8 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
                     logger.error(f"Error processing file {name}: {str(e)}")
                     results["failed_files"].append(name)
 
-            logger.info(f"Completed processing {results['processed_files']} files")
-            logger.info(f"Found {len(sensitive_file_ids)} sensitive files")
+            logger.debug(f"Completed processing {results['processed_files']} files")
+            logger.debug(f"Found {len(sensitive_file_ids)} sensitive files")
             results["scan_complete"] = True
             
             # --- CALCULATE WEIGHTED RISK SCORES FOR SENSITIVE FILES ---
@@ -673,8 +672,8 @@ async def scan_files(source='local', path_or_drive_id='.', output_json='scan_rep
             medium_risk_files = sum(1 for file in results["files"] if file.get("riskLevelLabel") == "medium")
             low_risk_files = sum(1 for file in results["files"] if file.get("riskLevelLabel") == "low")
             
-            logger.info(f"Risk distribution summary: High={high_risk_files}, Medium={medium_risk_files}, Low={low_risk_files}")
-            logger.info(f"Total sensitive files processed: {len(sensitive_file_ids)}")
+            logger.debug(f"Risk distribution summary: High={high_risk_files}, Medium={medium_risk_files}, Low={low_risk_files}")
+            logger.debug(f"Total sensitive files processed: {len(sensitive_file_ids)}")
             
             # Add primary sensitivity reason to each file (highest weighted category)
             for file_obj in results["files"]:

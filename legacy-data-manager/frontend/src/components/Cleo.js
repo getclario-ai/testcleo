@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import config from '../config';
+import logger from '../utils/logger';
 import '../styles/Cleo.css';
 
 const cleoCommands = [
   { name: 'List Directories', description: 'Show available directories' },
   { name: 'Analyze', description: 'Analyze selected directory' },
+  { name: 'Audit Trail', description: 'View activity audit trail' },
   { name: 'Clean', description: 'Clean up selected directory' }
 ];
 
@@ -33,8 +35,11 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
   const [showAnalysisOptions, setShowAnalysisOptions] = useState(false);
   
   const location = useLocation();
+  const navigate = useNavigate();
+  const hasInitializedRef = useRef(false); // Track if we've already initialized to prevent duplicate calls
+  const isFetchingDirectoriesRef = useRef(false); // Track if we're currently fetching to prevent duplicate calls
 
-  console.log('Cleo component state:', {
+  logger.log('Cleo component state:', {
     isConnected,
     isLoading,
     showDirectorySelection,
@@ -42,119 +47,28 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
     selectedDirectory
   });
 
-  useEffect(() => {
-    // Check for auth error in URL params
-    const urlParams = new URLSearchParams(window.location.search);
-    const authError = urlParams.get('auth');
-    const errorMessage = urlParams.get('message');
-    
-    if (authError === 'error') {
-      setMessages(prev => [...prev, {
-        type: 'assistant',
-        content: `Authentication failed: ${errorMessage || 'Please try connecting again.'}`
-      }]);
-      // Clean up URL
-      window.history.replaceState({}, document.title, window.location.pathname);
-    } else if (authError === 'success') {
-      setMessages(prev => [...prev, {
-        type: 'assistant',
-        content: 'Successfully connected to Google Drive! I can help you analyze your documents. Try these commands:\n\n• "list directories" - Show available directories\n• "scan directory" - Analyze files in a directory\n• "help" - Show all available commands'
-      }]);
-      setIsConnected(true);
-      window.history.replaceState({}, document.title, window.location.pathname);
-      fetchDirectories();
-    }
-    
-    // Check connection status on mount
-    console.log('Cleo component mounted, checking connection...');
-    const initializeConnection = async () => {
-      try {
-        const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/status`, {
-          method: 'GET',
-          credentials: 'include',
-          headers: {
-            'Accept': 'application/json',
-          }
-        });
-        console.log('Initial connection check response:', response);
-        const data = await response.json();
-        console.log('Initial connection check data:', data);
-        
-        if (data.isAuthenticated) {
-          console.log('User is authenticated, setting connected state');
-          setIsConnected(true);
-          await fetchDirectories();
-        } else {
-          console.log('User is not authenticated, showing connect button');
-          setIsConnected(false);
-        }
-      } catch (error) {
-        console.error('Error during initial connection check:', error);
-        setIsConnected(false);
-      }
-    };
-
-    initializeConnection();
-  }, [location]);
-
-  const handleConnect = async () => {
-    console.log('Initiating connection...');
-    try {
-      setIsLoading(true);
-      const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/login`, {
-        method: 'GET',
-        credentials: 'include',
-        headers: {
-          'Accept': 'application/json'
-        }
-      });
-      
-      console.log('Connect response:', response);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to get auth URL: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log('Connect data:', data);
-      
-      if (data.auth_url) {
-        console.log('Redirecting to auth URL:', data.auth_url);
-        // Add message before redirect
-        setMessages(prev => [...prev, {
-          type: 'assistant',
-          content: 'Redirecting you to Google for authentication...'
-        }]);
-        window.location.href = data.auth_url;
-      } else {
-        throw new Error('No authentication URL received from server');
-      }
-    } catch (error) {
-      console.error('Error connecting:', error);
-      setMessages(prev => [...prev, {
-        type: 'assistant',
-        content: `Failed to connect: ${error.message}. Please try again.`
-      }]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const fetchDirectories = async () => {
-    console.log('Fetching directories...');
+    // Prevent duplicate concurrent calls
+    if (isFetchingDirectoriesRef.current) {
+      logger.log('Already fetching directories, skipping duplicate call');
+      return;
+    }
+    
+    isFetchingDirectoriesRef.current = true;
+    logger.log('Fetching directories...');
     try {
       setIsLoading(true);
       const response = await fetch(`${config.apiBaseUrl}/api/v1/drive/directories`, {
         ...config.fetchOptions
       });
       
-      console.log('Directories response:', response);
-      console.log('Response status:', response.status);
+      logger.log('Directories response:', response);
+      logger.log('Response status:', response.status);
       
       if (!response.ok) {
-        console.error('Failed to fetch directories:', response.status);
+        logger.error('Failed to fetch directories:', response.status);
         if (response.status === 401) {
-          console.log('Unauthorized, setting connected to false');
+          logger.log('Unauthorized, setting connected to false');
           setIsConnected(false);
           setMessages(prev => [...prev, {
             type: 'assistant',
@@ -166,10 +80,10 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
       }
       
       const directories = await response.json();
-      console.log('Directories data:', directories);
+      logger.log('Directories data:', directories);
       
       if (Array.isArray(directories) && directories.length > 0) {
-        console.log('Found directories:', directories);
+        logger.log('Found directories:', directories);
         setDirectories(directories);
         const directoryList = directories.map(dir => `• ${dir.name}`).join('\n');
         setMessages(prev => [...prev, {
@@ -177,7 +91,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
           content: `Here are your available directories:\n\n${directoryList}`
         }]);
       } else {
-        console.log('No directories found in response');
+        logger.log('No directories found in response');
         setDirectories([]);
         setMessages(prev => [...prev, {
           type: 'assistant',
@@ -185,7 +99,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
         }]);
       }
     } catch (error) {
-      console.error('Error fetching directories:', error);
+      logger.error('Error fetching directories:', error);
       setIsConnected(false);
       setMessages(prev => [...prev, {
         type: 'assistant',
@@ -193,17 +107,132 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
       }]);
     } finally {
       setIsLoading(false);
+      isFetchingDirectoriesRef.current = false;
     }
   };
 
+  useEffect(() => {
+    // Prevent duplicate initialization (React StrictMode causes double renders in dev)
+    if (hasInitializedRef.current) {
+      logger.log('Skipping duplicate initialization');
+      return;
+    }
+
+    // Check for auth error in URL params
+    const urlParams = new URLSearchParams(window.location.search);
+    const authError = urlParams.get('auth');
+    const errorMessage = urlParams.get('message');
+    
+    let handledOAuthSuccess = false;
+    
+    if (authError === 'error') {
+      setMessages(prev => [...prev, {
+        type: 'assistant',
+        content: `Authentication failed: ${errorMessage || 'Please try connecting again.'}`
+      }]);
+      // Clean up URL
+      window.history.replaceState({}, document.title, window.location.pathname);
+      hasInitializedRef.current = true; // Mark as initialized
+    } else if (authError === 'success') {
+      setMessages(prev => [...prev, {
+        type: 'assistant',
+        content: 'Successfully connected to Google Drive! I can help you analyze your documents. Try these commands:\n\n• "list directories" - Show available directories\n• "scan directory" - Analyze files in a directory\n• "help" - Show all available commands'
+      }]);
+      setIsConnected(true);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      fetchDirectories();
+      handledOAuthSuccess = true; // Mark that we've already fetched directories
+      hasInitializedRef.current = true; // Mark as initialized
+    }
+    
+    // Check connection status on mount (only if we didn't handle OAuth success)
+    if (!handledOAuthSuccess) {
+      logger.log('Cleo component mounted, checking connection...');
+      const initializeConnection = async () => {
+        try {
+          const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/status`, {
+            method: 'GET',
+            credentials: 'include',
+            headers: {
+              'Accept': 'application/json',
+            }
+          });
+          logger.log('Initial connection check response:', response);
+          const data = await response.json();
+          logger.log('Initial connection check data:', data);
+          
+          if (data.isAuthenticated) {
+            logger.log('User is authenticated, setting connected state');
+            setIsConnected(true);
+            await fetchDirectories();
+          } else {
+            logger.log('User is not authenticated, showing connect button');
+            setIsConnected(false);
+          }
+        } catch (error) {
+          logger.error('Error during initial connection check:', error);
+          setIsConnected(false);
+        } finally {
+          hasInitializedRef.current = true; // Mark as initialized after check completes
+        }
+      };
+
+      initializeConnection();
+    }
+  }, []); // Empty dependency array - only run once on mount
+
+  const handleConnect = async () => {
+    logger.log('Initiating connection...');
+    try {
+      setIsLoading(true);
+      const response = await fetch(`${config.apiBaseUrl}/api/v1/auth/google/login`, {
+        method: 'GET',
+        credentials: 'include',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      logger.log('Connect response:', response);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to get auth URL: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      logger.log('Connect data:', data);
+      
+      if (data.auth_url) {
+        logger.log('Redirecting to auth URL:', data.auth_url);
+        // Add message before redirect
+        setMessages(prev => [...prev, {
+          type: 'assistant',
+          content: 'Redirecting you to Google for authentication...'
+        }]);
+        window.location.href = data.auth_url;
+      } else {
+        throw new Error('No authentication URL received from server');
+      }
+    } catch (error) {
+      logger.error('Error connecting:', error);
+      setMessages(prev => [...prev, {
+        type: 'assistant',
+        content: `Failed to connect: ${error.message}. Please try again.`
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+
   const handleAnalyze = async (directory) => {
     if (!directory) {
-      console.error('handleAnalyze called with no directory');
+      logger.error('handleAnalyze called with no directory');
       return;
     }
     
     try {
-      console.log('Starting analysis for directory:', {
+      logger.log('Starting analysis for directory:', {
         id: directory.id,
         name: directory.name,
         mimeType: directory.mimeType
@@ -213,7 +242,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
       // Add cache-busting parameter to force fresh data
       const timestamp = Date.now();
       const analyzeUrl = `${config.apiBaseUrl}/api/v1/drive/directories/${directory.id}/analyze?t=${timestamp}`;
-      console.log('Making analyze request to:', analyzeUrl);
+      logger.log('Making analyze request to:', analyzeUrl);
       
       const response = await fetch(analyzeUrl, {
         method: 'POST',
@@ -224,7 +253,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
         credentials: 'include'
       });
 
-      console.log('Analysis response:', {
+      logger.log('Analysis response:', {
         status: response.status,
         ok: response.ok,
         statusText: response.statusText
@@ -232,7 +261,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
 
       if (!response.ok) {
         const errorData = await response.json().catch(e => ({ message: 'Failed to parse error response' }));
-        console.error('Analysis failed:', {
+        logger.error('Analysis failed:', {
           status: response.status,
           error: errorData
         });
@@ -247,7 +276,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
       }
 
       const data = await response.json();
-      console.log('Raw analysis data received:', data);
+      logger.log('Raw analysis data received:', data);
       
       // Clear any cached stats to ensure fresh data
       localStorage.removeItem('fid_stats');
@@ -259,7 +288,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
         ? { id: responseDirectory.id || directory.id, name: responseDirectory.name }
         : { id: directory.id, name: directory.name || directory.id };
       
-      console.log('Cleo: Setting directory in transformedData:', finalDirectory);
+      logger.log('Cleo: Setting directory in transformedData:', finalDirectory);
       
       // Transform data to match expected structure for the frontend
       const transformedData = {
@@ -303,7 +332,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
         content: `Analysis complete for "${finalDirectory.name}". Check the dashboard for detailed insights.`
       }]);
     } catch (error) {
-      console.error('Analysis error:', error);
+      logger.error('Analysis error:', error);
       setMessages(prev => [...prev, {
         type: 'assistant',
         content: `Sorry, I encountered an error during analysis: ${error.message}`
@@ -324,7 +353,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
       // Implement cleaning logic here
       // This will depend on your backend API structure
     } catch (error) {
-      console.error('Error cleaning directory:', error);
+      logger.error('Error cleaning directory:', error);
     } finally {
       setIsLoading(false);
     }
@@ -338,9 +367,16 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
         fetchDirectories();
         break;
       case 'analyze':
+        // Only fetch directories if we don't have them yet
+        if (directories.length === 0) {
+          fetchDirectories();
+        }
         setShowDirectorySelection(true);
         setShowAnalysisOptions(false);
         setSelectedDirectory(null);
+        break;
+      case 'audit trail':
+        navigate('/audit-trail');
         break;
       case 'clean':
         if (selectedDirectory) {
@@ -353,12 +389,12 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
         }
         break;
       default:
-        console.warn('Unknown command:', cmd.name);
+        logger.warn('Unknown command:', cmd.name);
     }
   };
 
   const handleDirectorySelect = async (directory) => {
-    console.log('Directory selected:', {
+    logger.log('Directory selected:', {
       id: directory.id,
       name: directory.name,
       mimeType: directory.mimeType
@@ -442,11 +478,27 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
           {messages.map((msg, index) => (
             <div key={index} className={`message ${msg.type}`}>
               {msg.type === 'assistant' && (
-                <div className="message-avatar">K</div>
+                <div className="message-avatar">Zo</div>
               )}
               <div className="message-content">{msg.content}</div>
             </div>
           ))}
+          
+          {/* Action buttons in chat view (like Amazon Rufus) */}
+          {isConnected && (
+            <div className="chat-action-buttons">
+              {cleoCommands.map((cmd) => (
+                <button
+                  key={cmd.name}
+                  className="chat-action-button"
+                  onClick={() => handleCommand({ name: cmd.name })}
+                  disabled={isLoading}
+                >
+                  {cmd.name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {!isConnected ? (
@@ -457,18 +509,6 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
           </div>
         ) : (
           <>
-            <div className="command-buttons">
-              {cleoCommands.map((cmd) => (
-                <button
-                  key={cmd.name}
-                  className="command-button"
-                  onClick={() => handleCommand({ name: cmd.name })}
-                  disabled={isLoading}
-                >
-                  {cmd.name}
-                </button>
-              ))}
-            </div>
 
             {showDirectorySelection && (
               <div className="directory-selection">
@@ -516,6 +556,7 @@ const Cleo = ({ onCommand, onStatsUpdate }) => {
           placeholder="Type a message..."
           value={message}
           onChange={(e) => setMessage(e.target.value)}
+          disabled
         />
       </form>
     </div>

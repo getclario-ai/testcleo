@@ -47,6 +47,11 @@ yarn-error.log*
 .DS_Store
 Thumbs.db
 
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
 # Sensitive files
 legacy-data-manager/backend/.env
 legacy-data-manager/backend/secrets/

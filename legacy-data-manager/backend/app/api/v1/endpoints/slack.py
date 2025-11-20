@@ -13,7 +13,7 @@ import urllib.parse
 from ....core.config import settings
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+# Logging level is configured in main.py
 
 router = APIRouter()
 

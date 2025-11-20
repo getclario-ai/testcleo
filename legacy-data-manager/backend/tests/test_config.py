@@ -10,7 +10,7 @@ from app.core.config import settings
 
 def test_project_settings():
     """Test project settings"""
-    assert settings.PROJECT_NAME == "Legacy Data Manager"
+    assert settings.PROJECT_NAME == "Clario"
     assert settings.API_V1_STR == "/api/v1"
     assert settings.VERSION == "1.0.0"
     assert settings.DESCRIPTION == "Document and Data Management Platform"
